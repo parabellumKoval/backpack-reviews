@@ -18,6 +18,18 @@ class Review extends BaseReview
     |--------------------------------------------------------------------------
     */
 
+         
+    public function getMorphClass()
+    {
+        return 'Backpack\Reviews\app\Models\Review';
+    } 
+
+    public function getSettingsButtonHtml()
+    {
+      return '<a href="'.url('admin/settings/reviews').'" class="btn btn-outline-dark">
+                            <i class="la la-gear"></i> Настройки отзывов
+                        </a>';
+    }
     /*
     |--------------------------------------------------------------------------
     | RELATIONS
@@ -37,7 +49,11 @@ class Review extends BaseReview
     |--------------------------------------------------------------------------
     */   
     public function getOwnerAttribute() {
-      return [$this->extras['owner']];
+      return isset($this->extras['owner'])? [$this->extras['owner']]: null;
+    }
+
+    public function getEnabledDetailsRowAttribute() {
+      return $this->children()->exists();
     }
 
     /*

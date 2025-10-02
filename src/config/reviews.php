@@ -8,6 +8,8 @@ return [
   // Is default review moderated
   'is_moderated_default' => false,
 
+  'can_moderate' => fn () => backpack_auth()->check(),
+
   // CATALOG
   'per_page' => 12,
 

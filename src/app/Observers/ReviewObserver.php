@@ -6,77 +6,53 @@ use Backpack\Reviews\app\Models\Review;
 use Backpack\Store\app\Models\Product;
 use App\Notifications\ReviewBonus;
 
+use Backpack\Reviews\app\Services\ReviewTypeResolver;
+
+use Backpack\Reviews\app\Events\ReviewPublished;
+use Backpack\Reviews\app\Events\ReviewUnpublished;
+use Backpack\Reviews\app\Events\ReviewDeleted;
+
 class ReviewObserver
 {
-  public function created(Review $review){
-    //$product = $review->product;
+/**
+     * Сразу после создания отзыва:
+     * - если стратегия "no_moderation" → считаем опубликованным и диспатчим ReviewPublished
+     * - если "with_moderation" → ждём модерации (ничего не шлём)
+     */
+    public function created(Review $review): void
+    {
+        if (!ReviewTypeResolver::withModeration($review)) {
+            // Можно просто шлём событие (флаг в БД можешь не трогать, если не требуется)
+            event(new ReviewPublished($review));
+        }
+    }
 
-    //$this->updateProductRating($product);
-  }
+    /**
+     * При обновлении: отслеживаем смену флага is_moderated
+     * false -> true  => ReviewPublished
+     * true  -> false => ReviewUnpublished
+     */
+    public function updated(Review $review): void
+    {
+        if ($review->wasChanged('is_moderated')) {
+            if ((bool) $review->is_moderated === true) {
+                event(new ReviewPublished($review));
+            } else {
+                event(new ReviewUnpublished($review));
+            }
+        }
+    }
 
-// Проблема:
-// При одновременном изменении рейтинга и отношения с товаром,
-// рейтинг для товара  рассчитывается исходя из 
-// предыдущего значения рейтинга отзыва.
+    /**
+     * Определение стратегии публикации по типу reviewable.
+     * Ключи настроек:
+     *  - rw.product.publish_strategy
+     *  - rw.article.publish_strategy
+     * Фолбек: rw.default.publish_strategy = 'with_moderation'
+     */
 
-  public function updated(Review $review){
-    // $product = $review->product;
-    // $productId = $product? $product->id : null;
-    // $originalProductId = $review->getOriginal()['product_id'];
-
-    // if($originalProductId && $originalProductId != $productId) {
-    //   $this->updateProductRating(Product::find($originalProductId));
-    // }
-
-    // $this->updateProductRating($product);
-    
-    // // Удалить из пакета
-    // if($review->is_moderated && $review->transaction) {
-    //   $transaction = $review->transaction;
-      
-    //   if(!$transaction)	return;
-      
-    //   $usermeta = $transaction->usermeta;
-      
-    //   if(!$usermeta) return;
-      	
-    //   $transaction->balance = $usermeta->bonus_balance + $transaction->change;
-    //   $transaction->is_completed = 1;
-    //   $transaction->created_at = now();
-    //   $transaction->save();
-      
-    //   $usermeta->notify(new ReviewBonus($transaction));
-    //   //\Auth::user()->usermeta->notify(new ReviewBonus($transaction));
-    // }
-  }
-
-  public function deleted(Review $review) {
-    // $product = $review->product;
-
-    // $this->updateProductRating($product);
-  }
-
-  public function updateProductRating($product) {
-    
-    // if($product == null)
-    //   return;
-
-    // $productReviews = $product->reviews->where('is_moderated', 1)->where('rating', '!=', null);
-    // $averageRating = 0;
-
-    // if(!count($productReviews)) {
-    //   $product->rating = null;
-    //   $product->save();
-    //   return;
-    // }
-
-    // foreach($productReviews as $review) {
-    //   $averageRating += $review->rating;
-    // }
-
-    // $averageRating = $averageRating / count($productReviews);
-    // $product->rating = round($averageRating);
-    // $product->save();
-  }
+    public function deleting(Review $review) {
+        event(new ReviewDeleted($review));
+    }
   
 }

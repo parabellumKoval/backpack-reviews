@@ -14,6 +14,11 @@ use \Illuminate\Database\Eloquent\ModelNotFoundException;
 
 use \Rd\app\Traits\RdTrait;
 
+use Backpack\Reviews\app\Models\Review;
+use Backpack\Reviews\app\Events\ReviewCreated;
+
+use Backpack\Reviews\app\Services\ReviewTypeResolver;
+
 class ReviewController extends \App\Http\Controllers\Controller
 {
   use RdTrait;
@@ -23,10 +28,10 @@ class ReviewController extends \App\Http\Controllers\Controller
   public $rd_fields = null;
 
   public function __construct() {
-    $this->review_model = config('backpack.reviews.review_model', 'Backpack\Reviews\app\Models\Review');
+    $this->review_model = \Settings::get('backpack.reviews.review_model', Review::class);
 
     // Rd 
-    $this->rd_fields = config('backpack.reviews.fields');
+    $this->rd_fields = \Settings::get('backpack.reviews.fields');
   }
   
   /**
@@ -86,10 +91,11 @@ class ReviewController extends \App\Http\Controllers\Controller
     // Create new model
     $review = new $this->review_model();
 
-    $review = $this->prepareModel($review);
-
     // Fill model with data using RdTrait
     $review = $this->setRequestFields($review, $data);
+
+    //
+    $review = $this->moderationPolicy($review);
 
     // SET EXTRAS FROM REQUEST
     try {
@@ -107,6 +113,7 @@ class ReviewController extends \App\Http\Controllers\Controller
     try {
       // Save order
       $review->save();
+      ReviewCreated::dispatch($review);
     }catch(\Expression $e) {
       return response()->json($e->getMessage(), $e->getCode());
     }
@@ -115,13 +122,13 @@ class ReviewController extends \App\Http\Controllers\Controller
   }
      
   /**
-   * prepareModel
+   * moderationPolicy
    *
    * @param  mixed $model
    * @return void
    */
-  protected function prepareModel($model) {
-    if(config('backpack.reviews.is_moderated_default', false)) {
+  protected function moderationPolicy($model) {
+    if(!ReviewTypeResolver::withModeration($model)) {
       $model->is_moderated = true;
     }else {
       $model->is_moderated = false;
@@ -180,7 +187,7 @@ class ReviewController extends \App\Http\Controllers\Controller
     else if($data['provider'] === 'auth') 
     {
       if(!Auth::guard(config('backpack.reviews.auth_guard', 'profile'))->check()){
-        throw new \Exception('User not authenticated', 404);
+        throw new \Exception('User not authenticated', 401);
       }
 
       $owner_model = Auth::guard(config('backpack.reviews.auth_guard', 'profile'))->user();

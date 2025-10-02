@@ -22,6 +22,9 @@ class ReviewCrudController extends CrudController
     use \Backpack\CRUD\app\Http\Controllers\Operations\DeleteOperation;
     //use \Backpack\CRUD\app\Http\Controllers\Operations\ShowOperation;
     use \Backpack\CRUD\app\Http\Controllers\Operations\FetchOperation;
+    use \Backpack\CRUD\app\Http\Controllers\Operations\BulkDeleteOperation;
+
+    use \Backpack\Helpers\Traits\Admin\TreeListOperation;
 
     use \App\Http\Controllers\Admin\Traits\ReviewCrud;
 
@@ -31,8 +34,14 @@ class ReviewCrudController extends CrudController
       $this->crud->setRoute(config('backpack.base.route_prefix') . '/review');
       $this->crud->setEntityNameStrings('отзыв', 'отзывы');
 
-      $this->reviewableList = config('backpack.reviews.reviewable_types_list', []);
+      $reviewable_types_list = \Settings::get('backpack.reviews.reviewable_types_list', []);
 
+      $reviewable_options = [];
+      foreach ($reviewable_types_list as $item) {
+          $reviewable_options[$item['model']] = $item['name'];
+      }
+      $this->reviewableList = $reviewable_options;
+      
       // CURRENT MODEL
       $this->setEntry();
 
@@ -44,6 +53,21 @@ class ReviewCrudController extends CrudController
 
       // Trait
       $this->setupOperation();
+
+      
+      $this->setupTreeList([
+        'title' => 'Ответы к отзыву' 
+      ]); 
+    }
+
+
+    /**
+     * Backpack вызовет этот метод для details_row.
+     * Вернёт HTML со всеми дочерними элементами (таблица без пагинации/сортировки).
+     */
+    public function showDetailsRow($id)
+    {
+        return $this->showDetailsRowTrait($id);
     }
 
     protected function setupShowOperation()
@@ -52,27 +76,23 @@ class ReviewCrudController extends CrudController
     
     protected function setupListOperation()
     {
+
+      $this->crud->addButtonFromModelFunction('top', 'reviews_settings', 'getSettingsButtonHtml', 'end');
+
       // TODO: remove setFromDb() and manually define Columns, maybe Filters
       
       // $this->crud->setFromDb();
               
-      $this->crud->addColumn([
-        'name' => 'is_moderated',
-        'label' => '✅',
-        'type' => 'check'
-      ]);
-
-      $this->crud->addColumn([
-        'name' => 'photoAnyway',
-        'label' => '📷',
-        'type' => 'image',
-        'height' => '50px',
-        'width'  => '50px',
-      ]);
       
       $this->crud->addColumn([
         'name' => 'created_at',
-        'label' => '🗓'
+        'label' => 'Дата',
+        'type'=>'datetime'
+      ]);
+      $this->crud->addColumn([
+        'name' => 'is_moderated',
+        'label' => 'Опубликован',
+        'type' => 'toggle',
       ]);
       
       if(config('backpack.reviews.enable_review_type')) {
@@ -83,32 +103,34 @@ class ReviewCrudController extends CrudController
       }
     
       if(config('backpack.reviews.owner_model', null)) {
+        // $this->crud->addColumn([
+        //   'name' => 'user',
+        //   'label' => 'Автор',
+        //   'type' => 'relationship',
+        //   'attribute' => 'email'
+        // ]);
         $this->crud->addColumn([
-          'name' => 'user',
-          'label' => 'Автор',
-          'type' => 'relationship',
-          'attribute' => 'email'
+            'name'       => 'owner_id',
+            'label'      => 'Автор',
+            'type'       => 'user_card',
+            'user_model' => \App\Models\User::class,
         ]);
       }
       
       if(config('backpack.reviews.enable_rating')) {
+        // $this->crud->addColumn([
+        //   'name' => 'rating',
+        //   'label' => '⭐',
+        // ]);
         $this->crud->addColumn([
-          'name' => 'rating',
-          'label' => '⭐',
-        ]);
-      }
-
-      if(config('backpack.reviews.enable_likes')) {
-        $this->crud->addColumn([
-          'name' => 'likes',
-          'label' => '👍',
-        ]);
-      }
-
-      if(config('backpack.reviews.enable_likes')) {
-        $this->crud->addColumn([
-          'name' => 'dislikes',
-          'label' => '👎',
+            'name'  => 'rating',        // поле в БД (число, например 3.4)
+            'type'  => 'rating_stars',  // совпадает с именем blade-файла
+            'label' => 'Рейтинг',
+            'max'   => 5,               // максимально возможное значение (обязательно)
+            // опционально:
+            'color' => '#f2c200',       // цвет звёзд (золото/жёлтый)
+            'size'  => '18px',          // размер иконок (например 16-20px)
+            'show_value' => true,       // показывать всплывающую подсказку "X / max"
         ]);
       }
 
@@ -116,6 +138,38 @@ class ReviewCrudController extends CrudController
         'name' => 'text',
         'label' => 'Текст'
       ]);
+
+      $this->crud->addColumn([
+        'name'         => 'reactions',          // аксессор вернёт массив
+        'type'         => 'reactions',     // имя blade-файла
+        'label'        => 'Реакции',
+        'likes_key'    => 'likes',
+        'dislikes_key' => 'dislikes',
+        // визуальные опции:
+        'compact'      => false,
+        'show_total'   => true,                 // показать Σ и %
+        'size'         => '18px',
+        'likes_color'  => '#28a745',
+        'dislikes_color' => '#dc3545',
+        'thousand_sep' => ' ',
+        // Если Backpack экранирует HTML, убедись что колонка не экранируется:
+        'escaped'      => false,
+      ]);
+
+
+      // if(config('backpack.reviews.enable_likes')) {
+      //   $this->crud->addColumn([
+      //     'name' => 'likes',
+      //     'label' => '👍',
+      //   ]);
+      // }
+
+      // if(config('backpack.reviews.enable_likes')) {
+      //   $this->crud->addColumn([
+      //     'name' => 'dislikes',
+      //     'label' => '👎',
+      //   ]);
+      // }
 
       // Trait
       $this->listOperation();

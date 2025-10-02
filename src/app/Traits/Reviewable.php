@@ -16,6 +16,14 @@ trait Reviewable {
     return $this->reviews()->moderated()->sum('dislikes');
   }
 
+  public function getReviewsWithRatingCountAttribute() {
+    return $this->reviews()->moderated()->where('rating', '!=', null)->count();
+  }
+
+  public function getReviewsCountAttribute() {
+    return $this->reviews()->moderated()->count();
+  }
+
   public function getRatingAttribute() {
     $rating = $this->reviews()->moderated()->avg('rating');
     return $rating? round($rating, 1): null;

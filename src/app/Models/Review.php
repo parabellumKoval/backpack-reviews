@@ -11,10 +11,13 @@ use Backpack\Reviews\database\factories\ReviewFactory;
 
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+use Backpack\Helpers\Traits\HasDisplayLabel;
+
 class Review extends Model
 {
     use CrudTrait;
     use HasFactory;
+    use HasDisplayLabel;
     
     /*
     |--------------------------------------------------------------------------
@@ -49,6 +52,7 @@ class Review extends Model
 	  // protected $with = ['owner'];
 
     protected $casts = [
+      'is_moderated' => 'bool',
       'extras' => 'array',
     ];
 	
@@ -92,6 +96,25 @@ class Review extends Model
     {
       return ReviewFactory::new();
     }
+
+    protected function displayLabelConfig(): array
+    {
+        // Считаем всё заранее и просто возвращаем массив
+        $prefix = 'Отзыв';
+
+        $text   = $this->text && mb_strlen($this->text) > 15 ?  mb_strcut($this->text, 0, 15) . '...': $this->text;
+        $user = $this->user? '👨‍💻 ' . $this->user->name: null; 
+        $time   = '🕒 ' . $this->created_at->format('Y-m-d H:i');
+
+        return [
+            'prefix' => $prefix,
+            'parts'   => array_filter([$text, $user, $time]),
+            'join'    => ' / ',
+            // 'country' => $this->country_code ?? '',
+            // 'html_template' => 'crud::columns.order_display_label'
+        ];
+    }
+
     /*
     |--------------------------------------------------------------------------
     | RELATIONS
@@ -142,7 +165,15 @@ class Review extends Model
     |--------------------------------------------------------------------------
     | ACCESSORS
     |--------------------------------------------------------------------------
-    */    
+    */  
+    public function getReactionsAttribute(): array
+    {
+        return [
+            'likes' => (int) ($this->attributes['likes'] ?? 0),
+            'dislikes' => (int) ($this->attributes['dislikes'] ?? 0),
+        ];
+    }
+
     /**
      * getShortReviewableAttribute
      *
@@ -218,7 +249,7 @@ class Review extends Model
     }
 
     public function getOwnerAttribute() {
-      return [$this->extras['owner']];
+      return isset($this->extras['owner'])? [$this->extras['owner']]: null;
     }
 
     public function getExtrasOwnerIdAttribute() {
