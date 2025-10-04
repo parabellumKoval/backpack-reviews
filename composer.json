@@ -20,7 +20,6 @@
   "require": {
     "php": "^8.2",
     "laravel/framework": "^12.0",
-    "backpack/crud": "dev-store",
     "parabellumkoval/request-data": "0.1.x-dev"
   },
   "require-dev": {
