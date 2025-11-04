@@ -14,6 +14,11 @@ class ReviewMediumResource extends JsonResource
      */
     public function toArray($request)
     {
+
+      $clear_extras = $this->extras;
+      unset($clear_extras['owner']);
+      unset($clear_extras['video']);
+      
       return [
         'id' => $this->id,
         'rating' => $this->rating,
@@ -21,6 +26,9 @@ class ReviewMediumResource extends JsonResource
         'dislikes' => $this->dislikes? $this->dislikes: 0,
         'text' => $this->text,
         'owner' => $this->ownerModelOrInfo,
+        'video' => $this->videoData(true),
+        'is_video' => (bool) $this->is_video,
+        'extras' => $clear_extras,
         'children' => self::collection($this->children),
         'created_at' => $this->created_at
       ];

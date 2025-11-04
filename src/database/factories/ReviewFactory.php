@@ -21,12 +21,28 @@ class ReviewFactory extends Factory
      */
     public function definition()
     {
+      $hasVideo = $this->faker->boolean(20);
+
       return [
         'is_moderated' => $this->faker->randomElement([1,0]),
         'likes' => $this->faker->randomDigit(),
         'dislikes' => $this->faker->randomDigit(),
         'rating' => $this->faker->numberBetween(1, config('backpack.reviews.rating_length', 5)),
         'text' => $this->faker->paragraph(2),
+        'is_video' => $hasVideo,
+        'video_url' => $hasVideo ? 'https://www.youtube.com/embed/dQw4w9WgXcQ' : null,
+        'video_title' => $hasVideo ? [
+          'ru' => $this->faker->sentence(4),
+          'en' => $this->faker->sentence(4),
+        ] : [],
+        'video_poster' => $hasVideo ? [
+          [
+            'src' => 'reviews/video-posters/example.jpg',
+            'alt' => null,
+            'title' => null,
+            'size' => 'cover',
+          ],
+        ] : [],
         'extras' => [
           'owner' => [
             'id' => $this->faker->randomDigit(),

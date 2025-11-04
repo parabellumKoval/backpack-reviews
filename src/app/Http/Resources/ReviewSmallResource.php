@@ -21,6 +21,8 @@ class ReviewSmallResource extends JsonResource
         'dislikes' => $this->dislikes? $this->dislikes: 0,
         'text' => $this->text,
         'owner' => $this->ownerModelOrInfo,
+        'video' => $this->videoData(),
+        'is_video' => (bool) $this->is_video,
         'created_at' => $this->created_at
       ];
     }

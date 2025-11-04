@@ -43,32 +43,7 @@ class Review extends BaseReview
     |--------------------------------------------------------------------------
     */
 
-    /*
-    |--------------------------------------------------------------------------
-    | ACCESSORS
-    |--------------------------------------------------------------------------
-    */   
-    public function getOwnerAttribute() {
-      return isset($this->extras['owner'])? [$this->extras['owner']]: null;
-    }
-
     public function getEnabledDetailsRowAttribute() {
       return $this->children()->exists();
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | MUTATORS
-    |--------------------------------------------------------------------------
-    */
-
-    public function setExtrasAttribute($value) {
-      $extras = $value;
-      $owner_array = json_decode($value['owner'], true);
-
-      $extras['owner'] = !empty($owner_array)? $owner_array[0]: null;
-      
-      $this->attributes['extras'] = json_encode($extras);
-    }
-
 }

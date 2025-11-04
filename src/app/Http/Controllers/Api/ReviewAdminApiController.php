@@ -217,7 +217,7 @@ class ReviewAdminApiController extends Controller
     {
         $this->assertCanModerate();
 
-        $review->is_moderated = request()->input('is_moderated', 0);
+        $review->is_moderated = request()->input('is_active', 0);
         $review->save();
 
         return response()->json(['success' => true]);

@@ -66,6 +66,18 @@ return [
     'rating' => [
       'rules' => 'nullable|integer'
     ],
+    'is_video' => [
+      'rules' => 'nullable|boolean'
+    ],
+    'video_url' => [
+      'rules' => 'nullable|url|max:2048'
+    ],
+    'video_title' => [
+      'rules' => 'nullable'
+    ],
+    'video_poster' => [
+      'rules' => 'nullable'
+    ],
     'owner' => [
       // 'rules' => 'array:city,address,zip,method,warehouse',
       'store_in' => 'extras',

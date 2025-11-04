@@ -31,9 +31,10 @@ class ReviewRequest extends FormRequest
       
         return [
           'text' => 'required',
-            // $type . '_review_name' => 'required',
-            // $type . '_review_text' => 'required',
-            // $type . '_review_isAgree' => 'required',
+          'is_video' => 'nullable|boolean',
+          'video_url' => 'nullable|url|max:2048',
+          'video_title' => 'nullable',
+          'video_poster' => 'nullable',
         ];
     }
 

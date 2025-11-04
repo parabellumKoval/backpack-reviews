@@ -8,6 +8,8 @@ use Backpack\CRUD\app\Library\CrudPanel\CrudPanelFacade as CRUD;
 use Backpack\Reviews\app\Http\Requests\ReviewRequest;
 use Backpack\Reviews\app\Models\Admin\Review as AdminReview;
 
+use ParabellumKoval\BackpackImages\Traits\HasImagesCrudComponents;
+
 /**
  * Class ReviewCrudController
  * @package App\Http\Controllers\Admin
@@ -25,8 +27,9 @@ class ReviewCrudController extends CrudController
     use \Backpack\CRUD\app\Http\Controllers\Operations\BulkDeleteOperation;
 
     use \Backpack\Helpers\Traits\Admin\TreeListOperation;
-
     use \App\Http\Controllers\Admin\Traits\ReviewCrud;
+
+    use HasImagesCrudComponents;
 
     public function setup()
     {
@@ -79,6 +82,23 @@ class ReviewCrudController extends CrudController
 
       $this->crud->addButtonFromModelFunction('top', 'reviews_settings', 'getSettingsButtonHtml', 'end');
 
+      $this->crud->addFilter([
+        'name'  => 'is_video',
+        'type'  => 'dropdown',
+        'label' => 'Видео отзыв',
+      ], [
+        '1' => 'Только видео',
+        '0' => 'Без видео',
+      ], function ($value) {
+        if ($value === '1') {
+          $this->crud->addClause('where', 'is_video', true);
+        } else {
+          $this->crud->addClause('where', function ($query) {
+            $query->where('is_video', false)->orWhereNull('is_video');
+          });
+        }
+      });
+
       // TODO: remove setFromDb() and manually define Columns, maybe Filters
       
       // $this->crud->setFromDb();
@@ -93,6 +113,11 @@ class ReviewCrudController extends CrudController
         'name' => 'is_moderated',
         'label' => 'Опубликован',
         'type' => 'toggle',
+      ]);
+      $this->crud->addColumn([
+        'name' => 'is_video',
+        'label' => 'Видео',
+        'type' => 'boolean',
       ]);
       
       if(config('backpack.reviews.enable_review_type')) {
@@ -387,8 +412,10 @@ class ReviewCrudController extends CrudController
             ],
             [
                 'name'  => 'photo',
-                'type'  => 'browse',
+                'type'  => 'image',
                 'label' => 'Фото автора',
+                'crop' => false,
+                'aspect_ratio' => 1,
             ],
         ],
         'new_item_label'  => 'Добавить',
@@ -440,6 +467,62 @@ class ReviewCrudController extends CrudController
 
       $this->crud->addField([
         'name'  => 'separator_5',
+        'type'  => 'custom_html',
+        'value' => '<hr>'
+      ]);
+
+      $this->crud->addField([
+        'name'  => 'caption_video',
+        'type'  => 'custom_html',
+        'value' => '<h5>Видео</h5>'
+      ]);
+
+      $this->crud->addField([
+        'name' => 'is_video',
+        'label' => 'Видео отзыв',
+        'type' => 'boolean',
+        'default' => 0,
+        'hint' => 'Определяет, что отзыв относится к видео.',
+      ]);
+
+      $this->crud->addField([
+        'name' => 'video_url',
+        'label' => 'Ссылка на видео (embed)',
+        'type' => 'url',
+        'attributes' => [
+          'placeholder' => 'https://www.youtube.com/embed/...',
+        ],
+        'hint' => 'Используйте embed-ссылку, например https://www.youtube.com/embed/dQw4w9WgXcQ',
+      ]);
+
+      $this->crud->addField([
+        'name' => 'video_title',
+        'label' => 'Заголовок видео',
+        'type' => 'text',
+        'translatable' => true,
+        'attributes' => [
+          'maxlength' => 255,
+        ],
+      ]);
+
+      // $posterValue = $this->entry ? data_get($this->entry->videoPosterForApi(), 'url') : null;
+      // $this->crud->addField([
+      //   'name' => 'video_poster',
+      //   'label' => 'Постер видео',
+      //   'type' => 'image',
+      //   'crop' => false,
+      //   'aspect_ratio' => 16/9,
+      //   'value' => $posterValue,
+      //   'hint' => 'Изображение-обложка для видеоролика',
+      // ]);
+
+      $this->addImagesField([
+        'name' => 'video_poster',
+        'hint' => 'Изображение-обложка для видеоролика',
+      ]);
+
+      $this->crud->addField([
+        'name'  => 'separator_6',
         'type'  => 'custom_html',
         'value' => '<hr>'
       ]);
