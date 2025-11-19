@@ -2,44 +2,42 @@
 
 namespace Backpack\Reviews\app\Http\Controllers\Api;
 
+use Backpack\Reviews\app\Models\Review;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
-use Backpack\Reviews\app\Models\Review;
 
 class ReviewAdminApiController extends Controller
 {
-    protected function assertCanModerate()
+    protected function assertCanModerate(): void
     {
         $callback = config('backpack.reviews.can_moderate');
-        
+
         if (is_callable($callback)) {
             abort_unless(call_user_func($callback), 403);
         }
-        
-        // По умолчанию разрешаем модерацию для авторизованных админов
-        return true;
     }
 
-    // protected function resolveReviewable(string $type, int $id): Model
-    // {
-    //     // Преобразуем aliased FQN из morphMap если есть
-    //     $map = array_flip(\Illuminate\Database\Eloquent\Relations\Relation::morphMap() ?? []);
-    //     $class = $map[$type] ?? $type;
-    //     abort_unless(class_exists($class), 404, 'Reviewable class not found');
+    protected function reviewModelClass(): string
+    {
+        return config('backpack.reviews.review_model', Review::class) ?: Review::class;
+    }
 
-    //     $model = $class::query()->findOrFail($id);
-    //     abort_unless(method_exists($model, 'reviews'), 400, 'Model is not reviewable');
-    //     return $model;
-    // }
+    protected function newReviewInstance(): Review
+    {
+        $class = $this->reviewModelClass();
+
+        return new $class();
+    }
+
     protected function resolveReviewable(string $type, int $id): Model
     {
-        // $type может быть alias из morphMap или FQCN
         $class = class_exists($type)
             ? $type
             : (method_exists(Relation::class, 'getMorphedModel')
-                ? (Relation::getMorphedModel($type) ?: null)
+                ? Relation::getMorphedModel($type)
                 : null);
 
         if (!$class) {
@@ -51,34 +49,24 @@ class ReviewAdminApiController extends Controller
 
         $model = $class::query()->findOrFail($id);
         abort_unless(method_exists($model, 'reviews'), 400, 'Model is not reviewable');
+
         return $model;
     }
 
     public function index(string $type, int $id)
     {
         $this->assertCanModerate();
-        $reviewModel = config('backpack.reviews.review_model', Review::class);
 
         $reviewable = $this->resolveReviewable($type, $id);
+        $reviewModel = $this->reviewModelClass();
 
-        $query = $reviewModel::query()
+        $items = $reviewModel::query()
             ->where('reviewable_type', $reviewable->getMorphClass())
             ->where('reviewable_id', $reviewable->getKey())
-            ->orderBy('lft'); // предполагаем nested set (или по created_at)
-
-        $items = $query->get()->map(fn($r) => [
-            'id'           => $r->id,
-            'parent_id'    => $r->parent_id,
-            'depth'        => $r->depth,
-            'text'         => $r->text,
-            'rating'       => $r->rating,
-            'is_moderated' => (bool)$r->is_moderated,
-            'likes'        => $r->likes,
-            'dislikes'     => $r->dislikes,
-            'extras'       => $r->extras,
-            'created_at'   => $r->created_at?->toDateTimeString(),
-            'updated_at'   => $r->updated_at?->toDateTimeString(),
-        ]);
+            ->with('user')
+            ->orderBy('lft')
+            ->get()
+            ->map(fn (Review $review) => $this->transformReview($review));
 
         return response()->json(['data' => $items]);
     }
@@ -86,84 +74,45 @@ class ReviewAdminApiController extends Controller
     public function store(Request $request)
     {
         $this->assertCanModerate();
-        $reviewModel = config('backpack.reviews.review_model', Review::class);
 
-        $data = $request->validate([
-            'reviewable_type' => 'required|string',
-            'reviewable_id'   => 'required|integer',
-            'text'            => 'required|string',
-            'rating'          => 'nullable|integer|min:1|max:5',
-            'extras'          => 'nullable|array',
-            'is_moderated'    => 'nullable|boolean',
-        ]);
+        $data = $this->validateReviewPayload($request, true);
+        $reviewable = $this->resolveReviewable($data['reviewable_type'], (int) $data['reviewable_id']);
 
-        /** @var Review $review */
-        $review = $reviewModel::create([
-            'reviewable_type' => $data['reviewable_type'],
-            'reviewable_id'   => $data['reviewable_id'],
-            'text'            => $data['text'],
-            'rating'          => $data['rating'] ?? null,
-            'extras'          => $data['extras'] ?? null,
-            'is_moderated'    => (bool)($data['is_moderated'] ?? false),
-        ]);
+        $data['reviewable_type'] = $reviewable->getMorphClass();
+        $data['reviewable_id'] = $reviewable->getKey();
 
-        // если используете nested set — вставьте в конец
-        // $review->makeRoot(); или пересчёт lft/rgt по своей логике
+        $review = $this->createReviewRecord($data);
 
-        return response()->json(['data' => $review], 201);
+        return response()->json(['data' => $this->transformReview($review)], 201);
     }
 
     public function reply(Request $request, Review $review)
     {
         $this->assertCanModerate();
 
-        $maxDepth = (int)config('backpack.reviews.max_depth', 3);
-
-        $payload = $request->validate([
-            'text'         => 'required|string',
-            'rating'       => 'nullable|integer|min:1|max:5',
-            'extras'       => 'nullable|array',
-            'is_moderated' => 'nullable|boolean',
-        ]);
-
+        $maxDepth = (int) config('backpack.reviews.max_depth', 3);
         abort_if($review->depth >= $maxDepth, 422, 'Max depth reached');
 
-        /** @var Review $reply */
-        $reply = $review->replicate(['id', 'text', 'rating', 'extras', 'likes', 'dislikes', 'is_moderated', 'parent_id', 'lft', 'rgt', 'depth', 'created_at', 'updated_at']);
-        $reply->text = $payload['text'];
-        $reply->rating = $payload['rating'] ?? null;
-        $reply->extras = $payload['extras'] ?? null;
-        $reply->is_moderated = (bool)($payload['is_moderated'] ?? true);
-        $reply->parent_id = $review->id;
-        $reply->lft = 0; $reply->rgt = 0; $reply->depth = $review->depth + 1;
-        $reply->setAttribute('reviewable_type', $review->reviewable_type);
-        $reply->setAttribute('reviewable_id', $review->reviewable_id);
-        $reply->save();
+        $data = $this->validateReviewPayload($request, false);
+        $data['reviewable_type'] = $review->reviewable_type;
+        $data['reviewable_id'] = $review->reviewable_id;
+        $data['parent_id'] = $review->id;
 
-        // пересчёт дерева при необходимости
+        $reply = $this->createReviewRecord($data);
 
-        return response()->json(['data' => $reply], 201);
+        return response()->json(['data' => $this->transformReview($reply)], 201);
     }
 
     public function update(Request $request, Review $review)
     {
         $this->assertCanModerate();
 
-        $data = $request->validate([
-            'text'         => 'required|string',
-            'rating'       => 'nullable|integer|min:1|max:5',
-            'extras'       => 'nullable|array',
-            'is_moderated' => 'nullable|boolean',
-        ]);
+        $data = $this->validateReviewPayload($request, false);
 
-        $review->update([
-            'text'         => $data['text'],
-            'rating'       => $data['rating'] ?? null,
-            'extras'       => $data['extras'] ?? null,
-            'is_moderated' => (bool)($data['is_moderated'] ?? $review->is_moderated),
-        ]);
+        $this->fillReview($review, $data);
+        $review->save();
 
-        return response()->json(['data' => $review]);
+        return response()->json(['data' => $this->transformReview($review->fresh())]);
     }
 
     public function destroy(Review $review)
@@ -171,8 +120,7 @@ class ReviewAdminApiController extends Controller
         $this->assertCanModerate();
 
         DB::transaction(function () use ($review) {
-            // если nested set — удаляем поддерево; если adjacency — удаляем детей вручную
-            Review::where('parent_id', $review->id)->delete();
+            $review::query()->where('parent_id', $review->id)->delete();
             $review->delete();
         });
 
@@ -182,6 +130,7 @@ class ReviewAdminApiController extends Controller
     public function toggleModeration(Review $review)
     {
         $this->assertCanModerate();
+
         $review->is_moderated = ! $review->is_moderated;
         $review->save();
 
@@ -192,27 +141,22 @@ class ReviewAdminApiController extends Controller
     {
         $this->assertCanModerate();
         abort_unless(config('backpack.reviews.enable_likes'), 403);
+
         $review->increment('likes');
-        return response()->json(['data' => $review->only(['id','likes','dislikes'])]);
+
+        return response()->json(['data' => $review->only(['id', 'likes', 'dislikes'])]);
     }
 
     public function dislike(Review $review)
     {
         $this->assertCanModerate();
         abort_unless(config('backpack.reviews.enable_likes'), 403);
+
         $review->increment('dislikes');
-        return response()->json(['data' => $review->only(['id','likes','dislikes'])]);
+
+        return response()->json(['data' => $review->only(['id', 'likes', 'dislikes'])]);
     }
 
-
-
-    /**
-     * Method toggleIsModeratedRouter
-     *
-     * @param $id $id [explicite description]
-     *
-     * @return void
-     */
     public function toggleIsModeratedRouter(Review $review)
     {
         $this->assertCanModerate();
@@ -221,5 +165,296 @@ class ReviewAdminApiController extends Controller
         $review->save();
 
         return response()->json(['success' => true]);
+    }
+
+    public function owners(Request $request)
+    {
+        $this->assertCanModerate();
+
+        $class = config('backpack.reviews.owner_model');
+        abort_if(!$class || !class_exists($class), 404, 'Owner model is not configured');
+
+        $query = $class::query();
+        if (method_exists($class, 'profile')) {
+            $query->with('profile');
+        }
+
+        $search = trim((string) $request->get('q', ''));
+        if ($search !== '') {
+            $query->where(function ($builder) use ($search, $class) {
+                $builder->where('name', 'like', "%{$search}%")
+                    ->orWhere('email', 'like', "%{$search}%");
+
+                if (method_exists($class, 'profile')) {
+                    $builder->orWhereHas('profile', function ($profileQuery) use ($search) {
+                        $profileQuery
+                            ->where('first_name', 'like', "%{$search}%")
+                            ->orWhere('last_name', 'like', "%{$search}%");
+                    });
+                }
+            });
+        }
+
+        $owners = $query->orderByDesc($query->getModel()->getKeyName())
+            ->limit(20)
+            ->get();
+
+        $data = $owners->map(function ($owner) {
+            $profile = method_exists($owner, 'relationLoaded') && $owner->relationLoaded('profile')
+                ? $owner->getRelation('profile')
+                : null;
+
+            $profileName = $profile
+                ? trim(($profile->first_name ?? '') . ' ' . ($profile->last_name ?? ''))
+                : null;
+
+            $labelParts = array_filter([
+                $owner->name ?? null,
+                $profileName ?: null,
+                $owner->email ?? null,
+            ]);
+
+            $label = $labelParts ? implode(' • ', array_unique($labelParts)) : '#'.$owner->getKey();
+
+            return [
+                'id' => $owner->getKey(),
+                'text' => $label,
+                'name' => $label,
+                'email' => $owner->email ?? null,
+            ];
+        });
+
+        return response()->json(['data' => $data]);
+    }
+
+    protected function validateReviewPayload(Request $request, bool $requireReviewable): array
+    {
+        $rules = [
+            'text'            => ['required', 'string'],
+            'rating'          => ['nullable', 'integer', 'min:1', 'max:5'],
+            'extras'          => ['nullable', 'array'],
+            'is_moderated'    => ['nullable', 'boolean'],
+            'owner_mode'      => ['nullable', 'in:profile,guest'],
+            'owner_id'        => ['nullable', 'integer'],
+            'guest_name'      => ['nullable', 'string', 'max:255'],
+            'guest_email'     => ['nullable', 'email', 'max:255'],
+            'guest_phone'     => ['nullable', 'string', 'max:255'],
+            'verified_purchase' => ['nullable', 'boolean'],
+            'advantages'      => ['nullable', 'string'],
+            'flaws'           => ['nullable', 'string'],
+            'likes'           => ['nullable', 'integer', 'min:0'],
+            'dislikes'        => ['nullable', 'integer', 'min:0'],
+        ];
+
+        if ($requireReviewable) {
+            $rules['reviewable_type'] = ['required', 'string'];
+            $rules['reviewable_id']   = ['required', 'integer'];
+        }
+
+        return $request->validate($rules);
+    }
+
+    protected function createReviewRecord(array $data): Review
+    {
+        $review = $this->newReviewInstance();
+        $review->reviewable_type = $data['reviewable_type'];
+        $review->reviewable_id = $data['reviewable_id'];
+        $review->parent_id = $data['parent_id'] ?? null;
+
+        $this->fillReview($review, $data);
+        $review->save();
+
+        return $review->fresh();
+    }
+
+    protected function fillReview(Review $review, array $data): void
+    {
+        $review->text = $data['text'];
+        $review->rating = $data['rating'] ?? null;
+
+        if (array_key_exists('is_moderated', $data)) {
+            $review->is_moderated = (bool) $data['is_moderated'];
+        }
+
+        if (array_key_exists('likes', $data)) {
+            $review->likes = (int) $data['likes'];
+        }
+
+        if (array_key_exists('dislikes', $data)) {
+            $review->dislikes = (int) $data['dislikes'];
+        }
+
+        $ownerModel = $this->resolveOwnerModel($data);
+
+        if ($ownerModel) {
+            $review->owner_id = $ownerModel->getKey();
+        } elseif (($data['owner_mode'] ?? null) === 'guest') {
+            $review->owner_id = null;
+        }
+
+        $review->extras = $this->buildExtras($data, $review, $ownerModel);
+    }
+
+    protected function resolveOwnerModel(array $data): ?Model
+    {
+        $ownerMode = $data['owner_mode'] ?? null;
+        $ownerId = $data['owner_id'] ?? null;
+
+        if ($ownerMode === 'profile') {
+            abort_unless($ownerId, 422, trans('reviews::field.owner_required'));
+
+            $owner = $this->findOwnerModel((int) $ownerId);
+            abort_unless($owner, 422, trans('reviews::field.owner_required'));
+
+            return $owner;
+        }
+
+        if ($ownerId) {
+            return $this->findOwnerModel((int) $ownerId);
+        }
+
+        return null;
+    }
+
+    protected function findOwnerModel(?int $ownerId): ?Model
+    {
+        if (!$ownerId) {
+            return null;
+        }
+
+        $class = config('backpack.reviews.owner_model');
+        if (!$class || !class_exists($class)) {
+            return null;
+        }
+
+        return $class::query()->find($ownerId);
+    }
+
+    protected function buildExtras(array $data, Review $review, ?Model $owner = null): array
+    {
+        $extras = is_array($review->extras) ? $review->extras : [];
+
+        if (isset($data['extras']) && is_array($data['extras'])) {
+            $extras = array_merge($extras, $data['extras']);
+        }
+
+        foreach (['advantages', 'flaws'] as $key) {
+            if (array_key_exists($key, $data)) {
+                $value = $data[$key];
+                if ($value !== null && $value !== '') {
+                    $extras[$key] = $value;
+                } else {
+                    unset($extras[$key]);
+                }
+            }
+        }
+
+        if (array_key_exists('verified_purchase', $data)) {
+            $extras['verified_purchase'] = (bool) $data['verified_purchase'];
+        }
+
+        $ownerMode = $data['owner_mode'] ?? null;
+
+        if ($ownerMode === 'guest') {
+            $guestOwner = array_filter([
+                'name' => $data['guest_name'] ?? null,
+                'email' => $data['guest_email'] ?? null,
+                'phone' => $data['guest_phone'] ?? null,
+            ], fn ($value) => $value !== null && $value !== '');
+
+            if (!empty($guestOwner)) {
+                $extras['owner'] = $guestOwner;
+            } else {
+                unset($extras['owner']);
+            }
+        } elseif ($owner) {
+            $extras['owner'] = $this->ownerArrayFromModel($owner);
+        }
+
+        return $extras;
+    }
+
+    protected function ownerArrayFromModel(Model $owner): array
+    {
+        if (method_exists($owner, 'toReviewArray')) {
+            return $owner->toReviewArray();
+        }
+
+        $name = $owner->name ?? null;
+        $firstName = $owner->first_name ?? null;
+        $lastName = $owner->last_name ?? null;
+        $fullName = trim(($firstName ?? '') . ' ' . ($lastName ?? ''));
+
+        return array_filter([
+            'id' => $owner->getKey(),
+            'name' => $name ?: ($fullName ?: null),
+            'email' => $owner->email ?? null,
+            'phone' => $owner->phone ?? null,
+            'photo' => $owner->avatar ?? (method_exists($owner, 'avatarUrl') ? $owner->avatarUrl() : null),
+        ], fn ($value) => $value !== null && $value !== '');
+    }
+
+    protected function extrasArray(Review $review): array
+    {
+        $extras = $review->extras;
+
+        if (is_array($extras)) {
+            return $extras;
+        }
+
+        if (is_string($extras)) {
+            $decoded = json_decode($extras, true);
+
+            return json_last_error() === JSON_ERROR_NONE && is_array($decoded) ? $decoded : [];
+        }
+
+        return [];
+    }
+
+    protected function reviewOwnerPayload(Review $review, array $extras = []): ?array
+    {
+        $owner = $review->ownerModelOrInfo ?? null;
+
+        if ($owner instanceof Model) {
+            $payload = $this->ownerArrayFromModel($owner);
+
+            return !empty($payload) ? $payload : null;
+        }
+
+        $raw = $owner ?? ($extras['owner'] ?? null);
+        if (is_array($raw)) {
+            $payload = array_filter([
+                'id' => $raw['id'] ?? null,
+                'name' => $raw['name'] ?? ($raw['first_name'] ?? null),
+                'email' => $raw['email'] ?? null,
+                'phone' => $raw['phone'] ?? null,
+            ], fn ($value) => $value !== null && $value !== '');
+
+            return !empty($payload) ? $payload : null;
+        }
+
+        return null;
+    }
+
+    protected function transformReview(Review $review): array
+    {
+        $extras = $this->extrasArray($review);
+
+        return [
+            'id' => $review->id,
+            'parent_id' => $review->parent_id,
+            'depth' => $review->depth,
+            'text' => $review->text,
+            'rating' => $review->rating,
+            'is_moderated' => (bool) $review->is_moderated,
+            'likes' => (int) $review->likes,
+            'dislikes' => (int) $review->dislikes,
+            'advantages' => $extras['advantages'] ?? null,
+            'flaws' => $extras['flaws'] ?? null,
+            'verified_purchase' => (bool) ($extras['verified_purchase'] ?? false),
+            'owner' => $this->reviewOwnerPayload($review, $extras),
+            'created_at' => optional($review->created_at)->toDateTimeString(),
+            'updated_at' => optional($review->updated_at)->toDateTimeString(),
+        ];
     }
 }

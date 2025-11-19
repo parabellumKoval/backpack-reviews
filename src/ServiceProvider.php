@@ -22,7 +22,10 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
             __DIR__.'/resources/views/vendor/backpack/crud',
         ]);
 
-        $this->loadTranslationsFrom(__DIR__.'/resources/lang', 'review');
+        // Register reviews namespace for custom columns
+        View::addNamespace('reviews', __DIR__.'/resources/views/vendor/backpack/crud');
+
+        $this->loadTranslationsFrom(__DIR__.'/resources/lang', 'reviews');
     
 	    // Migrations
 	    $this->loadMigrationsFrom(__DIR__.'/database/migrations');

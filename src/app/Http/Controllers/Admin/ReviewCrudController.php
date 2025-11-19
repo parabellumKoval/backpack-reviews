@@ -27,6 +27,7 @@ class ReviewCrudController extends CrudController
     use \Backpack\CRUD\app\Http\Controllers\Operations\BulkDeleteOperation;
 
     use \Backpack\Helpers\Traits\Admin\TreeListOperation;
+    use \Backpack\Helpers\Traits\Admin\HasToggleColumns;
     use \App\Http\Controllers\Admin\Traits\ReviewCrud;
 
     use HasImagesCrudComponents;
@@ -109,24 +110,17 @@ class ReviewCrudController extends CrudController
         'label' => 'Дата',
         'type'=>'datetime'
       ]);
-      $this->crud->addColumn([
+      $this->addToggleColumn([
         'name' => 'is_moderated',
-        'label' => 'Опубликован',
-        'type' => 'toggle',
+        'label' => '<i class="la la-eye"></i>',
+        'toggle' => [
+            'values' => [
+                'checked' => 1,
+                'unchecked' => 0,
+            ],
+        ],
       ]);
-      $this->crud->addColumn([
-        'name' => 'is_video',
-        'label' => 'Видео',
-        'type' => 'boolean',
-      ]);
-      
-      if(config('backpack.reviews.enable_review_type')) {
-        $this->crud->addColumn([
-          'name' => 'type',
-          'label' => 'Тип',
-        ]);
-      }
-    
+
       if(config('backpack.reviews.owner_model', null)) {
         // $this->crud->addColumn([
         //   'name' => 'user',
@@ -141,44 +135,48 @@ class ReviewCrudController extends CrudController
             'user_model' => \App\Models\User::class,
         ]);
       }
+
+      $this->crud->addColumn([
+        'name' => 'is_video',
+        'label' => 'Тип',
+        'type' => 'view',
+        'view' => 'reviews::columns.review_type',
+        'show_text' => true,
+        'icon_size' => '20px',
+      ]);
+
+      // Reviewable entity card (Product, Article, etc.)
+      $this->crud->addColumn([
+        'name' => 'reviewable',
+        'label' => 'Связанная запись',
+        'type' => 'view',
+        'view' => 'reviews::columns.reviewable',
+        'escaped' => false,
+      ]);
       
-      if(config('backpack.reviews.enable_rating')) {
-        // $this->crud->addColumn([
-        //   'name' => 'rating',
-        //   'label' => '⭐',
-        // ]);
+      if(config('backpack.reviews.enable_review_type')) {
         $this->crud->addColumn([
-            'name'  => 'rating',        // поле в БД (число, например 3.4)
-            'type'  => 'rating_stars',  // совпадает с именем blade-файла
-            'label' => 'Рейтинг',
-            'max'   => 5,               // максимально возможное значение (обязательно)
-            // опционально:
-            'color' => '#f2c200',       // цвет звёзд (золото/жёлтый)
-            'size'  => '18px',          // размер иконок (например 16-20px)
-            'show_value' => true,       // показывать всплывающую подсказку "X / max"
+          'name' => 'type',
+          'label' => 'Тип',
         ]);
       }
 
+      // Combined column: Review text with reactions below
       $this->crud->addColumn([
-        'name' => 'text',
-        'label' => 'Текст'
-      ]);
-
-      $this->crud->addColumn([
-        'name'         => 'reactions',          // аксессор вернёт массив
-        'type'         => 'reactions',     // имя blade-файла
-        'label'        => 'Реакции',
-        'likes_key'    => 'likes',
+        'name' => 'text_with_reactions',
+        'label' => 'Отзыв',
+        'type' => 'view',
+        'view' => 'reviews::columns.review_text_with_reactions',
+        'text_limit' => 150,
+        'likes_key' => 'likes',
         'dislikes_key' => 'dislikes',
-        // визуальные опции:
-        'compact'      => false,
-        'show_total'   => true,                 // показать Σ и %
-        'size'         => '18px',
-        'likes_color'  => '#28a745',
+        'compact' => true,
+        'show_total' => true,
+        'reactions_size' => '14px',
+        'likes_color' => '#28a745',
         'dislikes_color' => '#dc3545',
         'thousand_sep' => ' ',
-        // Если Backpack экранирует HTML, убедись что колонка не экранируется:
-        'escaped'      => false,
+        'escaped' => false,
       ]);
 
 

@@ -6,7 +6,7 @@ use Illuminate\Support\Facades\Facade;
 use Backpack\Reviews\app\Services\ReviewsAttachService;
 
 /**
- * @method static void attachToCrud(\Backpack\CRUD\app\Library\CrudPanel\CrudPanel $crud, string $tab = 'Отзывы')
+ * @method static void attachToCrud(\Backpack\CRUD\app\Library\CrudPanel\CrudPanel $crud, string $tab = 'Отзывы', array $options = [])
  */
 class Reviews extends Facade
 {

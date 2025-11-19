@@ -1,7 +1,20 @@
 @php
   $entry = $crud->getCurrentEntry();
-  $reviewableType = $entry->getMorphClass();
-  $reviewableId   = $entry->getKey();
+  $modelCandidate = $crud->model ?? $crud->getModel();
+  $modelClass = is_object($modelCandidate)
+      ? get_class($modelCandidate)
+      : (is_string($modelCandidate) ? $modelCandidate : null);
+
+  $reviewableType = $field['reviewable_type'] ?? null;
+  if (!$reviewableType) {
+    if ($entry) {
+      $reviewableType = $entry->getMorphClass();
+    } elseif ($modelClass && class_exists($modelClass)) {
+      $reviewableType = (new $modelClass())->getMorphClass();
+    }
+  }
+
+  $reviewableId   = $entry?->getKey();
 
   $indexUrl    = route('bp.reviews.index',  ['type' => $reviewableType, 'id' => $reviewableId]);
   $storeUrl    = route('bp.reviews.store');
@@ -25,12 +38,13 @@
   data-dislike-url-template="{{ $dislikeUrl }}"
   data-reviewable-type="{{ $reviewableType }}"
   data-reviewable-id="{{ $reviewableId }}"
+  data-owners-url="{{ route('bp.reviews.owners') }}"
 >
   <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
-      <span><i class="la la-comments"></i> @lang('review::field.title')</span>
+      <span><i class="la la-comments"></i> @lang('reviews::field.title')</span>
       <button type="button" class="btn btn-sm btn-secondary js-refresh-reviews">
-        @lang('review::field.refresh')
+        @lang('reviews::field.refresh')
       </button>
     </div>
     <div class="card-body">
@@ -43,5 +57,3 @@
 
 @include('crud::fields.reviews._styles')
 @include('crud::fields.reviews._scripts')
-
-

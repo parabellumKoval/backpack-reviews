@@ -44,9 +44,45 @@ return [
   ],
   
   // Reviewable
+  // 'reviewable_types_list' => [
+  //   'Backpack\Store\app\Models\Product' => 'Товар',
+  //   'Backpack\Articles\app\Models\Article' => 'Статья'
+  // ],
+
+  // Reviewable
   'reviewable_types_list' => [
-    'Backpack\Store\app\Models\Product' => 'Товар',
-    'Backpack\Articles\app\Models\Article' => 'Статья'
+    'product' => [
+      'model' => 'App\Models\Product',
+      'name' => 'Товар',
+      'name_plur' => 'Товары',
+    ],
+    'article' => [
+      'model' => 'Backpack\Articles\app\Models\Article',
+      'name' => 'Статья',
+      'name_plur' => 'Статьи',
+    ]
+  ],
+
+  'global_country_code' => 'zz',
+  
+  'morph_aliases' => [
+    'App\Models\Product' => [
+      'model' => 'Backpack\Store\app\Models\Catalog',
+      'key' => 'group_id',
+      'country_field' => 'country_code'
+    ]
+  ],
+
+  // Reviewable Cards Configuration
+  'reviewable_cards_config' => [
+    'Backpack\Store\app\Models\Product' => [
+      'view' => 'store::reviews.reviewable_card',
+      'edit_route' => 'product.edit',
+    ],
+    'Backpack\Articles\app\Models\Article' => [
+      'view' => 'articles::reviews.reviewable_card',
+      'edit_route' => 'article.edit',
+    ],
   ],
 
   // Validation fields

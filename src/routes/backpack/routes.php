@@ -7,6 +7,11 @@ Route::group([
   'namespace'  => 'Backpack\Reviews\app\Http\Controllers\Admin',
 ], function () { 
     Route::crud('review', 'ReviewCrudController');
+    Route::post('review/{id}/toggle', [
+        'as' => 'reviews.toggle',
+        'uses' => 'ReviewCrudController@toggleColumnRouter',
+        'operation' => 'list',
+    ]);
 });
 
 
@@ -17,6 +22,7 @@ Route::group([
         config('backpack.base.middleware_key', 'admin'),
     ]),
 ], function () {
+    Route::get('owners', [ReviewAdminApiController::class, 'owners'])->name('bp.reviews.owners');
     // Получить дерево отзывов для reviewable
     Route::get('{type}/{id}', [ReviewAdminApiController::class, 'index'])->name('bp.reviews.index');
 
@@ -41,15 +47,3 @@ Route::group([
 
       
 });
-
-
-Route::group([
-    'prefix'     => config('backpack.base.route_prefix', 'admin') . '/review',
-    'middleware' => array_filter([
-        config('backpack.base.web_middleware', 'web'),
-        config('backpack.base.middleware_key', 'admin'),
-    ]),
-], function () {
-    Route::post('/{review}/toggle', [ReviewAdminApiController::class, 'toggleIsModeratedRouter'])->name('reviews.toggle');
-});
-
