@@ -30,6 +30,8 @@ class ReviewMediumResource extends JsonResource
         'is_video' => (bool) $this->is_video,
         'extras' => $clear_extras,
         'children' => self::collection($this->children),
+        'lang' => $this->lang,
+        'country' => $this->country,
         'created_at' => $this->created_at
       ];
     }

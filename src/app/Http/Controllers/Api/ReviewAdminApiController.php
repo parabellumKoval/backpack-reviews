@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class ReviewAdminApiController extends Controller
 {
@@ -230,7 +231,11 @@ class ReviewAdminApiController extends Controller
     protected function validateReviewPayload(Request $request, bool $requireReviewable): array
     {
         $rules = [
-            'text'            => ['required', 'string'],
+            'text'            => [
+                'nullable',
+                'string',
+                Rule::requiredIf(fn () => !$request->boolean('is_video')),
+            ],
             'rating'          => ['nullable', 'integer', 'min:1', 'max:5'],
             'extras'          => ['nullable', 'array'],
             'is_moderated'    => ['nullable', 'boolean'],
@@ -244,6 +249,12 @@ class ReviewAdminApiController extends Controller
             'flaws'           => ['nullable', 'string'],
             'likes'           => ['nullable', 'integer', 'min:0'],
             'dislikes'        => ['nullable', 'integer', 'min:0'],
+            'is_video'        => ['nullable', 'boolean'],
+            'video_url'       => ['nullable', 'url', 'max:2048'],
+            'video_title'     => ['nullable'],
+            'video_poster'    => ['nullable'],
+            'lang'            => ['nullable', 'string', 'min:2', 'max:5'],
+            'country'         => ['nullable', 'string', 'size:2'],
         ];
 
         if ($requireReviewable) {
@@ -282,6 +293,30 @@ class ReviewAdminApiController extends Controller
 
         if (array_key_exists('dislikes', $data)) {
             $review->dislikes = (int) $data['dislikes'];
+        }
+
+        if (array_key_exists('is_video', $data)) {
+            $review->is_video = (bool) $data['is_video'];
+        }
+
+        if (array_key_exists('video_url', $data)) {
+            $review->video_url = $data['video_url'];
+        }
+
+        if (array_key_exists('video_title', $data)) {
+            $review->video_title = $data['video_title'];
+        }
+
+        if (array_key_exists('video_poster', $data)) {
+            $review->video_poster = $data['video_poster'];
+        }
+
+        if (array_key_exists('lang', $data)) {
+            $review->lang = $data['lang'];
+        }
+
+        if (array_key_exists('country', $data)) {
+            $review->country = $data['country'];
         }
 
         $ownerModel = $this->resolveOwnerModel($data);
@@ -453,6 +488,10 @@ class ReviewAdminApiController extends Controller
             'flaws' => $extras['flaws'] ?? null,
             'verified_purchase' => (bool) ($extras['verified_purchase'] ?? false),
             'owner' => $this->reviewOwnerPayload($review, $extras),
+            'video' => $review->videoData(true),
+            'is_video' => (bool) $review->is_video,
+            'lang' => $review->lang,
+            'country' => $review->country,
             'created_at' => optional($review->created_at)->toDateTimeString(),
             'updated_at' => optional($review->updated_at)->toDateTimeString(),
         ];

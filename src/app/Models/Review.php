@@ -20,6 +20,8 @@ use ParabellumKoval\BackpackImages\Support\ImageUploadOptions;
 use Symfony\Component\HttpFoundation\File\File as SymfonyFile;
 use ParabellumKoval\BackpackImages\Traits\HasImages;
 use Throwable;
+use Backpack\Reviews\app\Events\ReviewChanged;
+use Backpack\Helpers\Traits\FormatsUniqAttribute;
 
 class Review extends Model
 {
@@ -28,6 +30,7 @@ class Review extends Model
     use HasDisplayLabel;
     use HasTranslations;
     use HasImages;
+    use FormatsUniqAttribute;
     
     /*
     |--------------------------------------------------------------------------
@@ -53,7 +56,9 @@ class Review extends Model
       'video_url',
       'video_title',
       'video_poster',
-      'extras'
+      'extras',
+      'lang',
+      'country',
     ];
     // protected $hidden = [];
     // protected $dates = [];
@@ -100,6 +105,8 @@ class Review extends Model
         "video" => $this->videoData(true),
         "is_video" => (bool) $this->is_video,
         "extras" => $this->extras,
+        "lang" => $this->lang,
+        "country" => $this->country,
         "created_at" => $this->created_at,
         "children" => $this->children,
       ];
@@ -129,6 +136,14 @@ class Review extends Model
             } else {
                 $review->is_video = false;
             }
+        });
+
+        static::saved(function (self $review): void {
+            event(ReviewChanged::for($review, 'saved'));
+        });
+
+        static::deleted(function (self $review): void {
+            event(ReviewChanged::for($review, 'deleted'));
         });
     }
 
@@ -313,7 +328,41 @@ class Review extends Model
     |--------------------------------------------------------------------------
     | ACCESSORS
     |--------------------------------------------------------------------------
-    */  
+    */
+    public function getUniqStringAttribute(): string
+    {
+        $subject = $this->reviewable_type
+            ? sprintf('%s #%s', class_basename($this->reviewable_type), $this->reviewable_id ?? '?')
+            : null;
+
+        return $this->formatUniqString([
+            '#'.$this->id,
+            sprintf('rating: %s', $this->rating ?? 0),
+            $subject,
+            sprintf('owner #%s', $this->owner_id ?? '?'),
+            $this->country,
+            $this->is_moderated ? 'moderated' : 'pending',
+        ]);
+    }
+
+    public function getUniqHtmlAttribute(): string
+    {
+        $subject = $this->reviewable_type
+            ? sprintf('%s #%s', class_basename($this->reviewable_type), $this->reviewable_id ?? '?')
+            : null;
+        $headline = $this->formatUniqString([
+            '#'.$this->id,
+            sprintf('rating: %s', $this->rating ?? 0),
+        ]);
+
+        return $this->formatUniqHtml($headline, [
+            $subject,
+            Str::limit($this->text ?? '', 60),
+            $this->country,
+            $this->is_moderated ? 'moderated' : 'pending',
+            $this->created_at ? $this->created_at->format('Y-m-d H:i') : null,
+        ]);
+    }
     protected function resolveOwnerExtras(): ?array
     {
         $owner = $this->extras['owner'] ?? null;
@@ -550,6 +599,39 @@ class Review extends Model
         }
 
         return !empty(array_filter($owner, fn ($item) => $item !== null && $item !== '')) ? $owner : null;
+    }
+
+    public function setLangAttribute($value): void
+    {
+        $this->attributes['lang'] = $this->normalizeLang($value);
+    }
+
+    public function setCountryAttribute($value): void
+    {
+        $this->attributes['country'] = $this->normalizeCountry($value);
+    }
+
+    protected function normalizeLang($value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $normalized = strtolower(substr((string) trim($value), 0, 5));
+
+        return $normalized !== '' ? $normalized : null;
+    }
+
+    protected function normalizeCountry($value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $cleaned = preg_replace('/[^a-zA-Z]/', '', (string) $value);
+        $normalized = strtoupper(substr($cleaned, 0, 2));
+
+        return strlen($normalized) === 2 ? $normalized : null;
     }
 
     protected function storeImageUsingUploader($value, string $folder, ?array $previous = null, bool $uploadRemote = true): ?array

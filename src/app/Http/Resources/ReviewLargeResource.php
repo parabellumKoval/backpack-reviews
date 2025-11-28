@@ -26,6 +26,8 @@ class ReviewLargeResource extends JsonResource
         'extras' => $this->extras,
         'children' => self::collection($this->children),
         'reviewable' => $this->shortReviewable,
+        'lang' => $this->lang,
+        'country' => $this->country,
         'created_at' => $this->created_at
       ];
     }

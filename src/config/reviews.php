@@ -88,7 +88,7 @@ return [
   // Validation fields
   'fields' => [
     'text' => [
-      'rules' => 'required|string|min:2|max:1000'
+      'rules' => 'nullable|string|min:2|max:1000|required_unless:is_video,1,true,on'
     ],
     'parent_id' => [
       'rules' => 'nullable|integer'
@@ -106,7 +106,7 @@ return [
       'rules' => 'nullable|boolean'
     ],
     'video_url' => [
-      'rules' => 'nullable|url|max:2048'
+      'rules' => 'nullable|url|max:2048|required_if:is_video,1,true,on'
     ],
     'video_title' => [
       'rules' => 'nullable'

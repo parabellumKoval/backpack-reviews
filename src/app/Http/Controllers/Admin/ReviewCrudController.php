@@ -137,6 +137,17 @@ class ReviewCrudController extends CrudController
       }
 
       $this->crud->addColumn([
+        'name' => 'country',
+        'label' => 'Страна',
+        'type' => 'flag',
+      ]);
+
+      $this->crud->addColumn([
+        'name' => 'lang',
+        'label' => 'Язык',
+      ]);
+
+      $this->crud->addColumn([
         'name' => 'is_video',
         'label' => 'Тип',
         'type' => 'view',
@@ -217,8 +228,10 @@ class ReviewCrudController extends CrudController
         'name' => 'parent',
         'label' => 'Родительский комментарий',
         'type' => 'relationship',
-        'attribute' => 'shortIdentity',
-        'ajax' => true
+        'attribute' => 'uniqHtml',
+        'ajax' => true,
+        'data_source' => route('backpack.helpers.fetch', ['key' => 'review']),
+        'minimum_input_length' => 2,
       ]);
 
       // $this->crud->addField([
@@ -311,12 +324,38 @@ class ReviewCrudController extends CrudController
         'label' => $this->getReviewableName(),
         'type' => "relationship",
         'model' => $this->getReviewableTypeModel(),
-        'data_source' => url("/admin/api/product"),
+        'attribute' => 'uniqHtml',
+        'data_source' => $this->getReviewableFetchRoute() ?? url("/admin/api/product"),
         'allows_null' => true,
         'attributes' => $attrs,
         'ajax' => true
       ]); 
-        
+
+      $this->crud->addField([
+        'name' => 'lang',
+        'label' => 'Язык',
+        'type' => 'text',
+        'wrapper' => ['class' => 'form-group col-md-2'],
+        'attributes' => [
+          'maxlength' => 5,
+          'placeholder' => 'uk',
+        ],
+        'hint' => 'ISO 639-1 код (напр. uk, en)',
+      ]);
+
+      $this->crud->addField([
+        'name' => 'country',
+        'label' => 'Страна',
+        'type' => 'text',
+        'wrapper' => ['class' => 'form-group col-md-2'],
+        'attributes' => [
+          'maxlength' => 2,
+          'placeholder' => 'UA',
+          'style' => 'text-transform:uppercase',
+        ],
+        'hint' => 'ISO 3166-1 Alpha-2 (UA, CZ, ...)',
+      ]);
+
       $this->crud->addField([
         'name'  => 'separator_2',
         'type'  => 'custom_html',
@@ -330,8 +369,11 @@ class ReviewCrudController extends CrudController
           'type' => 'relationship',
           'model' => config('backpack.reviews.owner_model'),
           // Should be implemented in owner model
-          'attribute' => 'uniqString',
-          'hint' => 'Cсылка на пользователя в системе'
+          'attribute' => 'uniqHtml',
+          'hint' => 'Cсылка на пользователя в системе',
+          'ajax' => true,
+          'data_source' => route('backpack.helpers.fetch', ['key' => 'user']),
+          'minimum_input_length' => 0,
         ]);
       }
 
@@ -443,26 +485,6 @@ class ReviewCrudController extends CrudController
         ]);
       }
 
-      if(config('backpack.reviews.enable_review_type')) {
-        $this->crud->addField([
-          'name' => 'text',
-          'label' => 'Сообщение/html-код видео',
-          'type' => 'textarea',
-          'attributes' => [
-            'rows' => '8'
-          ]
-        ]);
-      } else {
-        $this->crud->addField([
-          'name' => 'text',
-          'label' => 'Сообщение',
-          'type' => 'textarea',
-          'attributes' => [
-            'rows' => '8'
-          ]
-        ]);
-      }
-
       $this->crud->addField([
         'name'  => 'separator_5',
         'type'  => 'custom_html',
@@ -472,51 +494,74 @@ class ReviewCrudController extends CrudController
       $this->crud->addField([
         'name'  => 'caption_video',
         'type'  => 'custom_html',
-        'value' => '<h5>Видео</h5>'
+        'value' => '<h5>Тип отзыва</h5>'
       ]);
 
-      $this->crud->addField([
-        'name' => 'is_video',
-        'label' => 'Видео отзыв',
-        'type' => 'boolean',
-        'default' => 0,
-        'hint' => 'Определяет, что отзыв относится к видео.',
-      ]);
+      $videoPosterField = array_replace_recursive(
+        AdminReview::imageFieldDefinition('video_poster'),
+        [
+          'name' => 'video_poster',
+          'hint' => 'Изображение-обложка для видеоролика',
+        ]
+      );
 
       $this->crud->addField([
-        'name' => 'video_url',
-        'label' => 'Ссылка на видео (embed)',
-        'type' => 'url',
-        'attributes' => [
-          'placeholder' => 'https://www.youtube.com/embed/...',
+        'name' => 'content_blocks',
+        'type' => 'conditional_fields',
+        'driver' => [
+          'name' => 'is_video',
+          'label' => 'Видео отзыв',
+          'type' => 'boolean',
+          'default' => $this->entry? (int) $this->entry->is_video : 0,
+          'hint' => 'Переключатель определяет, какие поля нужно заполнить.',
         ],
-        'hint' => 'Используйте embed-ссылку, например https://www.youtube.com/embed/dQw4w9WgXcQ',
-      ]);
-
-      $this->crud->addField([
-        'name' => 'video_title',
-        'label' => 'Заголовок видео',
-        'type' => 'text',
-        'translatable' => true,
-        'attributes' => [
-          'maxlength' => 255,
+        'branches' => [
+          '0' => [
+            'fields' => [
+              [
+                'name' => 'text',
+                'label' => config('backpack.reviews.enable_review_type')
+                  ? 'Сообщение/html-код видео'
+                  : 'Сообщение',
+                'type' => 'textarea',
+                'attributes' => [
+                  'rows' => '8',
+                ],
+              ],
+            ],
+          ],
+          '1' => [
+            'fields' => [
+              [
+                'name' => 'video_url',
+                'label' => 'Ссылка на видео (embed)',
+                'type' => 'url',
+                'attributes' => [
+                  'placeholder' => 'https://www.youtube.com/embed/...',
+                ],
+                'hint' => 'Используйте embed-ссылку, например https://www.youtube.com/embed/dQw4w9WgXcQ',
+              ],
+              [
+                'name' => 'video_title',
+                'label' => 'Заголовок видео',
+                'type' => 'text',
+                'translatable' => true,
+                'attributes' => [
+                  'maxlength' => 255,
+                ],
+              ],
+              $videoPosterField,
+              [
+                'name' => 'text',
+                'label' => 'Комментарий (необязательно)',
+                'type' => 'textarea',
+                'attributes' => [
+                  'rows' => '6',
+                ],
+              ],
+            ],
+          ],
         ],
-      ]);
-
-      // $posterValue = $this->entry ? data_get($this->entry->videoPosterForApi(), 'url') : null;
-      // $this->crud->addField([
-      //   'name' => 'video_poster',
-      //   'label' => 'Постер видео',
-      //   'type' => 'image',
-      //   'crop' => false,
-      //   'aspect_ratio' => 16/9,
-      //   'value' => $posterValue,
-      //   'hint' => 'Изображение-обложка для видеоролика',
-      // ]);
-
-      $this->addImagesField([
-        'name' => 'video_poster',
-        'hint' => 'Изображение-обложка для видеоролика',
       ]);
 
       $this->crud->addField([
@@ -592,6 +637,23 @@ class ReviewCrudController extends CrudController
         return null;
       else
         return $model_string;
+    }
+
+    private function getReviewableFetchRoute()
+    {
+        $model = $this->getReviewableTypeModel();
+
+        if (!$model) {
+            return null;
+        }
+
+        $helperKey = helper_fetch_key_for_model($model);
+
+        if (!$helperKey) {
+            return null;
+        }
+
+        return route('backpack.helpers.fetch', ['key' => $helperKey]);
     }
 
     private function getReviewableName() {

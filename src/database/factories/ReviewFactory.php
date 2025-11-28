@@ -22,6 +22,7 @@ class ReviewFactory extends Factory
     public function definition()
     {
       $hasVideo = $this->faker->boolean(20);
+      $lang = $this->faker->randomElement(['en', 'uk', 'ru', 'cs', 'es', 'de']);
 
       return [
         'is_moderated' => $this->faker->randomElement([1,0]),
@@ -56,7 +57,9 @@ class ReviewFactory extends Factory
               'https://images.unsplash.com/photo-1489985033736-3e81bb38baae?q=80&w=1024&h=1024&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D'
             ]),
           ]
-        ]
+        ],
+        'lang' => $lang,
+        'country' => strtoupper($this->faker->countryCode()),
       ];
     }
 

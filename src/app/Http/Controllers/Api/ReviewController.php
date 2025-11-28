@@ -2,6 +2,8 @@
 
 namespace Backpack\Reviews\app\Http\Controllers\Api;
 
+use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Http\Request;
 
 use Illuminate\Support\Facades\Validator;
@@ -18,6 +20,7 @@ use Backpack\Reviews\app\Models\Review;
 use Backpack\Reviews\app\Events\ReviewCreated;
 
 use Backpack\Reviews\app\Services\ReviewTypeResolver;
+use Backpack\Reviews\app\Contracts\ReviewableAvailabilityScope;
 
 class ReviewController extends \App\Http\Controllers\Controller
 {
@@ -94,6 +97,13 @@ public function indexRelation(Request $request, $collection = null)
     $globalCountry = config('backpack.reviews.global_country_code');
     $categoryId     = $request->input('category_id');
     $videoOnly = $request->boolean('video');
+    $countryCode = $country ?: $globalCountry;
+
+    $availabilityContext = [
+        'country' => $countryCode,
+        'request' => $request,
+    ];
+    $reviewableTypeMap = $this->buildReviewableTypeMap($morphAliases);
 
     // 1) Разруливаем фильтр по слагу/типу → получаем reviewable_id
     $reviewableId = $request->input('reviewable_id');
@@ -128,8 +138,10 @@ public function indexRelation(Request $request, $collection = null)
         })
         ->orderBy('r.created_at', 'desc');
 
-    $qb->when($categoryId !== null, function ($q) use ($morphAliases, $categoryId, $country, $globalCountry) {
-        $q->where(function ($outer) use ($morphAliases, $categoryId, $country, $globalCountry) {
+    $this->applyReviewableAvailabilityFilter($qb, $reviewableTypeMap, $availabilityContext);
+
+    $qb->when($categoryId !== null, function ($q) use ($morphAliases, $categoryId, $countryCode) {
+        $q->where(function ($outer) use ($morphAliases, $categoryId, $countryCode) {
             foreach ($morphAliases as $origType => $alias) {
                 $modelClass   = $alias['model']         ?? null;   // напр. Backpack\Store\app\Models\Catalog
                 $joinKey      = $alias['key']           ?? 'id';   // напр. group_id
@@ -142,15 +154,14 @@ public function indexRelation(Request $request, $collection = null)
                 $table = (new $modelClass)->getTable(); // напр. ak_catalog
 
                 // EXISTS по алиас-таблице: сопоставляем r.reviewable_id с cat.{joinKey}
-                $outer->orWhereExists(function ($sub) use ($table, $joinKey, $countryField, $categoryId, $country, $globalCountry) {
+                $outer->orWhereExists(function ($sub) use ($table, $joinKey, $countryField, $categoryId, $countryCode) {
                     $sub->select(\DB::raw(1))
                         ->from($table . ' as cat')
                         ->whereColumn('cat.' . $joinKey, 'r.reviewable_id');
 
                     // фильтр по стране (если указан country_field в алиасе)
-                    $code = $country ?: $globalCountry;
-                    if ($countryField && $code) {
-                        $sub->where('cat.' . $countryField, $code);
+                    if ($countryField && $countryCode) {
+                        $sub->where('cat.' . $countryField, $countryCode);
                     }
 
                     // JSON-массив category_ids содержит искомый category_id
@@ -213,12 +224,11 @@ public function indexRelation(Request $request, $collection = null)
         $aliasConfig = collect($morphAliases)->firstWhere('model', $modelClass);
         $countryField = $aliasConfig['country_field'] ?? null;
 
-        if ($countryField) {
-            $countryCode = $country ?: $globalCountry;
-            if ($countryCode) {
-                $query->where($countryField, $countryCode);
-            }
+        if ($countryField && $countryCode) {
+            $query->where($countryField, $countryCode);
         }
+
+        $query = $this->applyAvailabilityScopeToBuilder($modelClass, $query, $availabilityContext);
 
         $loaded[$modelClass] = $query->get()->keyBy($key);
     }
@@ -268,6 +278,123 @@ public function indexRelation(Request $request, $collection = null)
       return $resource::collection($paginator);
     }
 }
+
+  protected function buildReviewableTypeMap(array $morphAliases): array
+  {
+    $map = [];
+    $configuredTypes = config('backpack.reviews.reviewable_types_list', []);
+
+    foreach ($configuredTypes as $definition) {
+      $modelClass = $definition['model'] ?? null;
+      if (!$modelClass) {
+        continue;
+      }
+
+      $map[$modelClass] = [
+        'model' => $modelClass,
+        'key' => 'id',
+        'country_field' => null,
+      ];
+    }
+
+    foreach ($morphAliases as $reviewableType => $alias) {
+      $aliasModel = $alias['model'] ?? null;
+      if (!$aliasModel) {
+        continue;
+      }
+
+      $map[$reviewableType] = [
+        'model' => $aliasModel,
+        'key' => $alias['key'] ?? 'id',
+        'country_field' => $alias['country_field'] ?? null,
+      ];
+    }
+
+    return $map;
+  }
+
+  protected function applyReviewableAvailabilityFilter(QueryBuilder $query, array $typeMap, array $context): void
+  {
+    if (empty($typeMap)) {
+      return;
+    }
+
+    $constraints = [];
+    $knownTypes = [];
+
+    foreach ($typeMap as $reviewableType => $meta) {
+      $modelClass = $meta['model'] ?? null;
+      if (!$modelClass || !class_exists($modelClass)) {
+        continue;
+      }
+
+      $builder = $modelClass::query();
+      $key = $meta['key'] ?? 'id';
+      $countryField = $meta['country_field'] ?? null;
+      $countryCode = $context['country'] ?? null;
+      $table = $builder->getModel()->getTable();
+
+      $builder->select($table . '.' . $key);
+
+      if ($countryField && $countryCode) {
+        $builder->where($table . '.' . $countryField, $countryCode);
+      }
+
+      $builder = $this->applyAvailabilityScopeToBuilder($modelClass, $builder, $context);
+
+      $subAlias = 'rel_' . substr(md5($reviewableType), 0, 8);
+
+      $constraints[$reviewableType] = function (QueryBuilder $branch) use ($builder, $key, $subAlias) {
+        $branch->whereExists(function ($exists) use ($builder, $key, $subAlias) {
+          $exists->selectRaw('1')
+            ->fromSub(clone $builder, $subAlias)
+            ->whereColumn("{$subAlias}.{$key}", 'r.reviewable_id');
+        });
+      };
+
+      $knownTypes[] = $reviewableType;
+    }
+
+    if (empty($constraints)) {
+      return;
+    }
+
+    $query->where(function ($outer) use ($constraints, $knownTypes) {
+      if (!empty($knownTypes)) {
+        $outer->whereNotIn('r.reviewable_type', $knownTypes);
+      }
+
+      foreach ($constraints as $type => $constraint) {
+        $outer->orWhere(function ($branch) use ($type, $constraint) {
+          $branch->where('r.reviewable_type', $type);
+          $constraint($branch);
+        });
+      }
+    });
+  }
+
+  protected function applyAvailabilityScopeToBuilder(string $modelClass, EloquentBuilder $builder, array $context): EloquentBuilder
+  {
+    if (!$this->modelSupportsAvailabilityScope($modelClass)) {
+      return $builder;
+    }
+
+    return $builder->reviewableAvailability($context);
+  }
+
+  protected function modelSupportsAvailabilityScope(string $modelClass): bool
+  {
+    if (!class_exists($modelClass)) {
+      return false;
+    }
+
+    $interfaces = class_implements($modelClass) ?: [];
+    if (in_array(ReviewableAvailabilityScope::class, $interfaces, true)) {
+      return true;
+    }
+
+    return method_exists($modelClass, 'scopeReviewableAvailability');
+  }
 
 
  /** 

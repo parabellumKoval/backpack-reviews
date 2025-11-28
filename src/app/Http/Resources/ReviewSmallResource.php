@@ -23,6 +23,8 @@ class ReviewSmallResource extends JsonResource
         'owner' => $this->ownerModelOrInfo,
         'video' => $this->videoData(),
         'is_video' => (bool) $this->is_video,
+        'lang' => $this->lang,
+        'country' => $this->country,
         'created_at' => $this->created_at
       ];
     }
