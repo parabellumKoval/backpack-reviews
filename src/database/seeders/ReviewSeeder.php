@@ -20,6 +20,7 @@ class ReviewSeeder extends Seeder
       (new \Symfony\Component\Console\Output\ConsoleOutput())->writeln("<info>Review was deleted.</info>");
 
       $this->fill();
+      $this->seedVivadzenReviews();
     }
 
     public function fill() {
@@ -58,5 +59,47 @@ class ReviewSeeder extends Seeder
           'reviewable_type' => $reviewable_type,
         ])
         ->create();
+    }
+
+    protected function seedVivadzenReviews(): void
+    {
+      $dataPath = __DIR__ . '/data/vivadzen_reviews.php';
+
+      if (!file_exists($dataPath)) {
+        return;
+      }
+
+      $reviews = include $dataPath;
+
+      if (!is_array($reviews) || empty($reviews)) {
+        return;
+      }
+
+      $defaults = [
+        'owner_id' => null,
+        'parent_id' => null,
+        'reviewable_id' => null,
+        'reviewable_type' => null,
+        'video_url' => null,
+        'video_title' => [],
+        'video_poster' => [],
+        'is_video' => false,
+        'is_moderated' => true,
+      ];
+
+      $inserted = 0;
+
+      foreach ($reviews as $review) {
+        if (!is_array($review) || empty($review['text'])) {
+          continue;
+        }
+
+        Review::create(array_merge($defaults, $review));
+        $inserted++;
+      }
+
+      if ($inserted > 0) {
+        (new \Symfony\Component\Console\Output\ConsoleOutput())->writeln('<info>Seeded ' . $inserted . ' Vivadzen showcase reviews.</info>');
+      }
     }
 }

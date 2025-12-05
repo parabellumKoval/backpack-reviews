@@ -12,6 +12,9 @@ use Illuminate\Validation\Rule;
 
 class ReviewAdminApiController extends Controller
 {
+    protected array $reviewableDefinitions = [];
+    protected bool $reviewableDefinitionsLoaded = false;
+
     protected function assertCanModerate(): void
     {
         $callback = config('backpack.reviews.can_moderate');
@@ -48,10 +51,98 @@ class ReviewAdminApiController extends Controller
 
         abort_unless($class && class_exists($class), 404, 'Reviewable class not found');
 
-        $model = $class::query()->findOrFail($id);
+        $model = $this->findReviewableByConfiguredKey($class, $id);
         abort_unless(method_exists($model, 'reviews'), 400, 'Model is not reviewable');
 
         return $model;
+    }
+
+    protected function reviewableDefinitions(): array
+    {
+        if (! $this->reviewableDefinitionsLoaded) {
+            $definitions = \Settings::get('backpack.reviews.reviewable_types_list', []);
+            $normalized = [];
+
+            foreach ($definitions as $definition) {
+                $model = $definition['model'] ?? null;
+                $class = $this->normalizeReviewableClass($model);
+
+                if (!$class) {
+                    continue;
+                }
+
+                $definition['model'] = $class;
+                $normalized[$class] = $definition;
+            }
+
+            $this->reviewableDefinitions = $normalized;
+            $this->reviewableDefinitionsLoaded = true;
+        }
+
+        return $this->reviewableDefinitions;
+    }
+
+    protected function findReviewableDefinition(string $class): ?array
+    {
+        $normalized = $this->normalizeReviewableClass($class);
+
+        if (!$normalized) {
+            return null;
+        }
+
+        return $this->reviewableDefinitions()[$normalized] ?? null;
+    }
+
+    protected function findReviewableByConfiguredKey(string $class, int $identifier): Model
+    {
+        $normalizedClass = $this->normalizeReviewableClass($class) ?? $class;
+        $definition = $this->findReviewableDefinition($normalizedClass);
+
+        /** @var \Illuminate\Database\Eloquent\Model $modelInstance */
+        $modelInstance = new $normalizedClass();
+        $keyColumn = $definition['reviewable_key'] ?? $modelInstance->getKeyName();
+
+        if ($keyColumn !== $modelInstance->getKeyName()) {
+            $record = $normalizedClass::query()->where($keyColumn, $identifier)->first();
+
+            if ($record) {
+                return $record;
+            }
+        }
+
+        return $normalizedClass::query()->findOrFail($identifier);
+    }
+
+    protected function determineReviewableIdentifier(Model $model)
+    {
+        if (method_exists($model, 'getReviewableKey')) {
+            $customKey = $model->getReviewableKey();
+
+            if ($customKey !== null) {
+                return $customKey;
+            }
+        }
+
+        $definition = $this->findReviewableDefinition(get_class($model));
+
+        if ($definition && !empty($definition['reviewable_key'])) {
+            $attribute = $model->getAttribute($definition['reviewable_key']);
+
+            if ($attribute !== null && $attribute !== '') {
+                return $attribute;
+            }
+        }
+
+        return $model->getKey();
+    }
+
+    protected function normalizeReviewableClass(?string $class): ?string
+    {
+        if (!$class) {
+            return null;
+        }
+
+        return ltrim($class, '\\');
     }
 
     public function index(string $type, int $id)
@@ -63,7 +154,7 @@ class ReviewAdminApiController extends Controller
 
         $items = $reviewModel::query()
             ->where('reviewable_type', $reviewable->getMorphClass())
-            ->where('reviewable_id', $reviewable->getKey())
+            ->where('reviewable_id', $this->determineReviewableIdentifier($reviewable))
             ->with('user')
             ->orderBy('lft')
             ->get()
@@ -80,7 +171,7 @@ class ReviewAdminApiController extends Controller
         $reviewable = $this->resolveReviewable($data['reviewable_type'], (int) $data['reviewable_id']);
 
         $data['reviewable_type'] = $reviewable->getMorphClass();
-        $data['reviewable_id'] = $reviewable->getKey();
+        $data['reviewable_id'] = $this->determineReviewableIdentifier($reviewable);
 
         $review = $this->createReviewRecord($data);
 

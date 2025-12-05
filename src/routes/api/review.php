@@ -12,6 +12,8 @@ Route::prefix('api/review')->middleware(['api', Backpack\Reviews\app\Http\Middle
 
         Route::get('/relation', 'indexRelation');
 
+        Route::get('/amount', 'amount');
+
         Route::get('/{id}', 'show');
 
         Route::post('', 'create')->middleware('api');

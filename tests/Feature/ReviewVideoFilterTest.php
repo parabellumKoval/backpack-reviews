@@ -91,4 +91,60 @@ class ReviewVideoFilterTest extends TestCase
         $this->assertSame($video->id, $data[0]['id']);
         $this->assertTrue($data[0]['is_video']);
     }
+
+    public function test_index_relation_allows_null_reviewable_type_filter(): void
+    {
+        $shopReview = Review::factory()->create([
+            'is_moderated' => 1,
+            'is_video' => false,
+            'reviewable_type' => null,
+            'reviewable_id' => null,
+            'parent_id' => 0,
+        ]);
+
+        Review::factory()->create([
+            'is_moderated' => 1,
+            'is_video' => false,
+            'reviewable_type' => 'App\\Models\\Product',
+            'reviewable_id' => 42,
+            'parent_id' => 0,
+        ]);
+
+        $response = $this->getJson('/api/review/relation?reviewable_type_null=1');
+
+        $response->assertOk();
+        $data = $response->json('data');
+
+        $this->assertCount(1, $data);
+        $this->assertSame($shopReview->id, $data[0]['id']);
+        $this->assertNull($data[0]['reviewable_type']);
+    }
+
+    public function test_index_allows_null_reviewable_type_filter(): void
+    {
+        $shopReview = Review::factory()->create([
+            'is_moderated' => 1,
+            'is_video' => false,
+            'reviewable_type' => null,
+            'reviewable_id' => null,
+            'parent_id' => 0,
+        ]);
+
+        Review::factory()->create([
+            'is_moderated' => 1,
+            'is_video' => false,
+            'reviewable_type' => 'App\\Models\\Product',
+            'reviewable_id' => 42,
+            'parent_id' => 0,
+        ]);
+
+        $response = $this->getJson('/api/review?reviewable_type_null=1');
+
+        $response->assertOk();
+        $data = $response->json('data');
+
+        $this->assertCount(1, $data);
+        $this->assertSame($shopReview->id, $data[0]['id']);
+        $this->assertNull($data[0]['reviewable_type']);
+    }
 }

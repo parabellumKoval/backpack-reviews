@@ -9,6 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Schema;
 
 // EXCEPTIONS
 use Rd\app\Exceptions\DetailedException;
@@ -37,6 +38,31 @@ class ReviewController extends \App\Http\Controllers\Controller
     $this->rd_fields = \Settings::get('backpack.reviews.fields');
   }
   
+  public function amount(Request $request) {
+    $videoOnly = $request->boolean('video');
+    $reviewable = request('reviewable_type', null);
+
+    // dd($reviewable, gettype($reviewable), $reviewable === 'null', $reviewable === null);
+
+    $amount = $this->review_model::query()
+          ->select('ak_reviews.*')
+          ->distinct('ak_reviews.id')
+          ->root()
+          ->moderated()
+          ->when($reviewable, function($query) use ($reviewable){
+            if($reviewable === 'null' || $reviewable === null) {
+              $query->whereNull('ak_reviews.reviewable_type');
+            }else {
+              $query->where('ak_reviews.reviewable_type', $reviewable);
+            }
+          })
+          ->when($videoOnly, function ($query) {
+            $query->where('ak_reviews.is_video', true);
+          })
+          ->count();
+
+    return $amount;
+  }
   /**
    * index
    *
@@ -45,36 +71,39 @@ class ReviewController extends \App\Http\Controllers\Controller
   */
   public function index(Request $request) {
     
-    $reviewable_id = request('reviewable_id');
     $videoOnly = $request->boolean('video');
 
-    if(request('reviewable_slug') && request('reviewable_type')) {
-      $reviewable = request('reviewable_type')::where('slug', request('reviewable_slug'))->first();
-      $reviewable_id = $reviewable? ($reviewable->parent_id ?? $reviewable->id): null;
-    }
-
-    $moderated = request('is_moderated');
+    // $reviewable_id = request('reviewable_id');
+    // if(request('reviewable_slug') && request('reviewable_type')) {
+    //   $reviewable = request('reviewable_type')::where('slug', request('reviewable_slug'))->first();
+    //   $reviewable_id = $reviewable? ($reviewable->parent_id ?? $reviewable->id): null;
+    // }
+    $reviewable = request('reviewable_type', 'null');
 
     $reviews = $this->review_model::query()
               ->select('ak_reviews.*')
               ->distinct('ak_reviews.id')
               ->root()
               ->moderated()
-              ->when($reviewable_id, function($query) use($reviewable_id){
-                $query->where('ak_reviews.reviewable_id', $reviewable_id);
-              })
-              ->when(request('reviewable_type'), function($query){
-                $query->where('ak_reviews.reviewable_type', request('reviewable_type'));
+              // ->when($reviewable_id, function($query) use($reviewable_id){
+              //   $query->where('ak_reviews.reviewable_id', $reviewable_id);
+              // })
+              ->when($reviewable, function($query) use ($reviewable){
+                if($reviewable === 'null' || $reviewable === null) {
+                  $query->whereNull('ak_reviews.reviewable_type');
+                }else {
+                  $query->where('ak_reviews.reviewable_type', $reviewable);
+                }
               })
               ->when($videoOnly, function ($query) {
                 $query->where('ak_reviews.is_video', true);
               })
-              ->when(!$videoOnly, function ($query) {
-                $query->where(function ($inner) {
-                  $inner->where('ak_reviews.is_video', false)
-                    ->orWhereNull('ak_reviews.is_video');
-                });
-              })
+              // ->when(!$videoOnly, function ($query) {
+              //   $query->where(function ($inner) {
+              //     $inner->where('ak_reviews.is_video', false)
+              //       ->orWhereNull('ak_reviews.is_video');
+              //   });
+              // })
               ->orderBy('created_at', 'desc');
 
     $per_page = request('per_page')? request('per_page'): config('backpack.reviews.per_page', 12);
@@ -84,200 +113,202 @@ class ReviewController extends \App\Http\Controllers\Controller
   }
 
   /**
- * indexRelation (QB + полиморфная подгрузка через morph_aliases)
- *
- * Цель: максимум производительности — основной запрос через Query Builder,
- * затем гидрация моделей и ручная подстановка полиморфных связей.
- */
-public function indexRelation(Request $request, $collection = null)
-{
-    $perPage = $request->input('per_page', config('backpack.reviews.per_page', 12));
-    $morphAliases = config('backpack.reviews.morph_aliases', []);
-    $country = $request->input('country'); // выбранная страна (может быть null)
-    $globalCountry = config('backpack.reviews.global_country_code');
-    $categoryId     = $request->input('category_id');
-    $videoOnly = $request->boolean('video');
-    $countryCode = $country ?: $globalCountry;
+   * indexRelation (QB + полиморфная подгрузка через morph_aliases)
+   *
+   * Цель: максимум производительности — основной запрос через Query Builder,
+   * затем гидрация моделей и ручная подстановка полиморфных связей.
+   */
+  public function indexRelation(Request $request, $collection = null)
+  {
+      $perPage = $request->input('per_page', config('backpack.reviews.per_page', 12));
+      $morphAliases = config('backpack.reviews.morph_aliases', []);
+      $globalCountry = config('backpack.reviews.global_country_code');
+      $categoryId     = $request->input('category_id');
+      $videoOnly = $request->boolean('video');
+      $countryCode = $this->resolveCountryCode($request) ?: $globalCountry;
+      $countryCode = $countryCode ? mb_strtolower($countryCode) : null;
 
-    $availabilityContext = [
-        'country' => $countryCode,
-        'request' => $request,
-    ];
-    $reviewableTypeMap = $this->buildReviewableTypeMap($morphAliases);
+      $availabilityContext = [
+          'country' => $countryCode,
+          'request' => $request,
+      ];
+      $reviewableTypeMap = $this->buildReviewableTypeMap($morphAliases);
 
-    // 1) Разруливаем фильтр по слагу/типу → получаем reviewable_id
-    $reviewableId = $request->input('reviewable_id');
-    if ($request->filled('reviewable_slug') && $request->filled('reviewable_type')) {
-        /** @var \Illuminate\Database\Eloquent\Model|null $reviewable */
-        $reviewable = ($request->input('reviewable_type'))::query()
-            ->where('slug', $request->input('reviewable_slug'))
-            ->first();
+      // 1) Разруливаем фильтр по слагу/типу → получаем reviewable_id
+      $reviewableId = $request->input('reviewable_id');
+      if ($request->filled('reviewable_slug') && $request->filled('reviewable_type')) {
+          /** @var \Illuminate\Database\Eloquent\Model|null $reviewable */
+          $reviewable = ($request->input('reviewable_type'))::query()
+              ->where('slug', $request->input('reviewable_slug'))
+              ->first();
 
-        $reviewableId = $reviewable ? ($reviewable->parent_id ?? $reviewable->getKey()) : null;
-    }
+          $reviewableId = $reviewable ? ($reviewable->getReviewableKey() ?? $reviewable->parent_id ?? $reviewable->getKey()) : null;
+      }
 
-    // 2) Базовый запрос по отзывам — только root+moderated
-    $qb = \DB::table('ak_reviews as r')
-        ->select('r.*')
-        ->where('r.parent_id', 0)           // scope root()
-        ->where('r.is_moderated', 1)        // scope moderated()
-        ->when($reviewableId, function ($q) use ($reviewableId) {
-            $q->where('r.reviewable_id', $reviewableId);
-        })
-        ->when($request->filled('reviewable_type'), function ($q) use ($request) {
-            $q->where('r.reviewable_type', $request->input('reviewable_type'));
-        })
-        ->when($videoOnly, function ($q) {
-            $q->where('r.is_video', true);
-        })
-        ->when(!$videoOnly, function ($q) {
-            $q->where(function ($inner) {
-                $inner->where('r.is_video', false)
-                      ->orWhereNull('r.is_video');
-            });
-        })
-        ->orderBy('r.created_at', 'desc');
+      // 2) Базовый запрос по отзывам — только root+moderated
+      $qb = \DB::table('ak_reviews as r')
+          ->select('r.*')
+          ->where('r.parent_id', 0)           // scope root()
+          ->where('r.is_moderated', 1)        // scope moderated()
+          ->when($reviewableId, function ($q) use ($reviewableId) {
+              $q->where('r.reviewable_id', $reviewableId);
+          })
+          ->when($request->filled('reviewable_type'), function ($q) use ($request) {
+              $q->where('r.reviewable_type', $request->input('reviewable_type'));
+          })
+          ->when($videoOnly, function ($q) {
+              $q->where('r.is_video', true);
+          })
+          // ->when(!$videoOnly, function ($q) {
+          //     $q->where(function ($inner) {
+          //         $inner->where('r.is_video', false)
+          //               ->orWhereNull('r.is_video');
+          //     });
+          // })
+          ->orderBy('r.created_at', 'desc');
 
-    $this->applyReviewableAvailabilityFilter($qb, $reviewableTypeMap, $availabilityContext);
+      $this->applyReviewableAvailabilityFilter($qb, $reviewableTypeMap, $availabilityContext);
 
-    $qb->when($categoryId !== null, function ($q) use ($morphAliases, $categoryId, $countryCode) {
-        $q->where(function ($outer) use ($morphAliases, $categoryId, $countryCode) {
-            foreach ($morphAliases as $origType => $alias) {
-                $modelClass   = $alias['model']         ?? null;   // напр. Backpack\Store\app\Models\Catalog
-                $joinKey      = $alias['key']           ?? 'id';   // напр. group_id
-                $countryField = $alias['country_field'] ?? null;   // напр. country_code
+      $qb->when($categoryId !== null, function ($q) use ($morphAliases, $categoryId, $countryCode) {
+          $q->where(function ($outer) use ($morphAliases, $categoryId, $countryCode) {
+              foreach ($morphAliases as $origType => $alias) {
+                  $modelClass   = $alias['model']         ?? null;   // напр. Backpack\Store\app\Models\Catalog
+                  $joinKey      = $alias['key']           ?? 'id';   // напр. group_id
+                  $countryField = $alias['country_field'] ?? null;   // напр. country_code
 
-                if (!$modelClass || !class_exists($modelClass)) {
-                    continue;
-                }
+                  if (!$modelClass || !class_exists($modelClass)) {
+                      continue;
+                  }
 
-                $table = (new $modelClass)->getTable(); // напр. ak_catalog
+                  $table = (new $modelClass)->getTable(); // напр. ak_catalog
 
-                // EXISTS по алиас-таблице: сопоставляем r.reviewable_id с cat.{joinKey}
-                $outer->orWhereExists(function ($sub) use ($table, $joinKey, $countryField, $categoryId, $countryCode) {
-                    $sub->select(\DB::raw(1))
-                        ->from($table . ' as cat')
-                        ->whereColumn('cat.' . $joinKey, 'r.reviewable_id');
+                  // EXISTS по алиас-таблице: сопоставляем r.reviewable_id с cat.{joinKey}
+                  $outer->orWhereExists(function ($sub) use ($table, $joinKey, $countryField, $categoryId, $countryCode) {
+                      $sub->select(\DB::raw(1))
+                          ->from($table . ' as cat')
+                          ->whereColumn('cat.' . $joinKey, 'r.reviewable_id');
 
-                    // фильтр по стране (если указан country_field в алиасе)
-                    if ($countryField && $countryCode) {
-                        $sub->where('cat.' . $countryField, $countryCode);
-                    }
+                      // фильтр по стране (если указан country_field в алиасе)
+                      if ($countryField && $countryCode) {
+                          $sub->where('cat.' . $countryField, $countryCode);
+                      }
 
-                    // JSON-массив category_ids содержит искомый category_id
-                    // Делаем оба варианта (int и string) во избежание несовпадений типов.
-                    $sub->where(function ($qq) use ($categoryId) {
-                        $qq->whereJsonContains('cat.category_ids', (int) $categoryId)
-                          ->orWhereJsonContains('cat.category_ids', (string) $categoryId);
-                    });
-                });
-            }
-        });
-    });
+                      // JSON-массив category_ids содержит искомый category_id
+                      // Делаем оба варианта (int и string) во избежание несовпадений типов.
+                      $sub->where(function ($qq) use ($categoryId) {
+                          $qq->whereJsonContains('cat.category_ids', (int) $categoryId)
+                            ->orWhereJsonContains('cat.category_ids', (string) $categoryId);
+                      });
+                  });
+              }
+          });
+      });
 
-    $reviewsAvg = (clone $qb)->avg('r.rating');
-    $ratingCount = (clone $qb)->whereNotNull('r.rating')->count();
+      $reviewsAvg = (clone $qb)->avg('r.rating');
+      $ratingCount = (clone $qb)->whereNotNull('r.rating')->count();
 
-    // 3) Пагинация Query Builder'ом
-    /** @var \Illuminate\Pagination\LengthAwarePaginator $paginator */
-    $paginator = $qb->paginate($perPage);
+      // 3) Пагинация Query Builder'ом
+      /** @var \Illuminate\Pagination\LengthAwarePaginator $paginator */
+      $paginator = $qb->paginate($perPage);
 
-    $rows = $paginator->items(); // stdClass[]
-    if (empty($rows)) {
-        $resource = config('backpack.reviews.resource.medium', 'Backpack\Reviews\app\Http\Resources\ReviewMediumResource');
+      $rows = $paginator->items(); // stdClass[]
+      if (empty($rows)) {
+          $resource = config('backpack.reviews.resource.medium', 'Backpack\Reviews\app\Http\Resources\ReviewMediumResource');
+          return $resource::collection($paginator);
+      }
+
+      // 4) Готовим "корзины" для батч-загрузки полиморфных связей
+      //    Учитываем morph_aliases: меняем класс и ключ, если указано в конфиге.
+      $buckets = []; // [modelClass => ['key' => string, 'ids' => int[]]]
+      foreach ($rows as $row) {
+          $origType = $row->reviewable_type;
+          $effectiveClass = $origType;
+          // ВНИМАНИЕ !!!! ПОМЕНЯТЬ
+          $effectiveKey   = 'group_id';
+
+          if (isset($morphAliases[$origType])) {
+              $effectiveClass = $morphAliases[$origType]['model'] ?? $origType;
+              $effectiveKey   = $morphAliases[$origType]['key']   ?? 'id';
+          }
+
+          if (!isset($buckets[$effectiveClass])) {
+              $buckets[$effectiveClass] = ['key' => $effectiveKey, 'ids' => []];
+          }
+          $buckets[$effectiveClass]['ids'][] = $row->reviewable_id;
+      }
+
+      // 5) Батч-фетчим связанные записи по каждому классу
+      $loaded = []; // [modelClass => Collection keyed by effectiveKey]
+      foreach ($buckets as $modelClass => $meta) {
+          $key  = $meta['key'];
+          $ids  = array_values(array_unique($meta['ids']));
+
+          if (!class_exists($modelClass)) {
+              $loaded[$modelClass] = collect();
+              continue;
+          }
+
+          $query = $modelClass::query()->whereIn($key, $ids);
+
+          // если для этого класса задан country_field в morph_aliases — применяем фильтр
+          $aliasConfig = collect($morphAliases)->firstWhere('model', $modelClass);
+          $countryField = $aliasConfig['country_field'] ?? null;
+
+          if ($countryField && $countryCode) {
+              $query->where($countryField, $countryCode);
+          }
+
+          $query = $this->applyAvailabilityScopeToBuilder($modelClass, $query, $availabilityContext);
+
+          $loaded[$modelClass] = $query->get()->keyBy($key);
+      }
+
+
+      // 6) Гидрируем отзывы в Eloquent модели и прикрепляем relation 'reviewable'
+      /** @var \Illuminate\Database\Eloquent\Collection $hydrated */
+      $hydrated = $this->review_model::hydrate(array_map('get_object_vars', $rows));
+
+      // Быстрый доступ к stdClass по id для синхронизации атрибутов
+      $rowById = [];
+      foreach ($rows as $r) {
+          $rowById[$r->id] = $r;
+      }
+
+      foreach ($hydrated as $review) {
+          $r = $rowById[$review->id] ?? null;
+          if (!$r) continue;
+
+          $origType = $r->reviewable_type;
+          $effectiveClass = $origType;
+          $effectiveKey   = 'id';
+
+          if (isset($morphAliases[$origType])) {
+              $effectiveClass = $morphAliases[$origType]['model'] ?? $origType;
+              $effectiveKey   = $morphAliases[$origType]['key']   ?? 'id';
+          }
+
+          $relModel = $loaded[$effectiveClass][$r->reviewable_id] ?? null;
+
+          // Восстанавливаем полиморфную связь "reviewable" (без лишних запросов)
+          if ($relModel) {
+              $review->setRelation('reviewable', $relModel);
+          } else {
+              // Чтобы не триггерить ленивую загрузку при сериализации
+              $review->setRelation('reviewable', null);
+          }
+      }
+
+      // 7) Подменяем коллекцию в пагинаторе на гидрированную
+      $paginator->setCollection($hydrated);
+
+      $resource = config('backpack.reviews.resource.medium', 'Backpack\Reviews\app\Http\Resources\ReviewMediumResource');
+      // 8) Возвращаем ресурсы как и раньше
+      if($collection) {
+        return new $collection($paginator, ['resource' => $resource, 'rating_count' => $ratingCount, 'reviews_avg' => $reviewsAvg]);
+      }else {
         return $resource::collection($paginator);
-    }
-
-    // 4) Готовим "корзины" для батч-загрузки полиморфных связей
-    //    Учитываем morph_aliases: меняем класс и ключ, если указано в конфиге.
-    $buckets = []; // [modelClass => ['key' => string, 'ids' => int[]]]
-    foreach ($rows as $row) {
-        $origType = $row->reviewable_type;
-        $effectiveClass = $origType;
-        $effectiveKey   = 'id';
-
-        if (isset($morphAliases[$origType])) {
-            $effectiveClass = $morphAliases[$origType]['model'] ?? $origType;
-            $effectiveKey   = $morphAliases[$origType]['key']   ?? 'id';
-        }
-
-        if (!isset($buckets[$effectiveClass])) {
-            $buckets[$effectiveClass] = ['key' => $effectiveKey, 'ids' => []];
-        }
-        $buckets[$effectiveClass]['ids'][] = $row->reviewable_id;
-    }
-
-    // 5) Батч-фетчим связанные записи по каждому классу
-    $loaded = []; // [modelClass => Collection keyed by effectiveKey]
-    foreach ($buckets as $modelClass => $meta) {
-        $key  = $meta['key'];
-        $ids  = array_values(array_unique($meta['ids']));
-
-        if (!class_exists($modelClass)) {
-            $loaded[$modelClass] = collect();
-            continue;
-        }
-
-        $query = $modelClass::query()->whereIn($key, $ids);
-
-        // если для этого класса задан country_field в morph_aliases — применяем фильтр
-        $aliasConfig = collect($morphAliases)->firstWhere('model', $modelClass);
-        $countryField = $aliasConfig['country_field'] ?? null;
-
-        if ($countryField && $countryCode) {
-            $query->where($countryField, $countryCode);
-        }
-
-        $query = $this->applyAvailabilityScopeToBuilder($modelClass, $query, $availabilityContext);
-
-        $loaded[$modelClass] = $query->get()->keyBy($key);
-    }
-
-    // 6) Гидрируем отзывы в Eloquent модели и прикрепляем relation 'reviewable'
-    /** @var \Illuminate\Database\Eloquent\Collection $hydrated */
-    $hydrated = $this->review_model::hydrate(array_map('get_object_vars', $rows));
-
-    // Быстрый доступ к stdClass по id для синхронизации атрибутов
-    $rowById = [];
-    foreach ($rows as $r) {
-        $rowById[$r->id] = $r;
-    }
-
-    foreach ($hydrated as $review) {
-        $r = $rowById[$review->id] ?? null;
-        if (!$r) continue;
-
-        $origType = $r->reviewable_type;
-        $effectiveClass = $origType;
-        $effectiveKey   = 'id';
-
-        if (isset($morphAliases[$origType])) {
-            $effectiveClass = $morphAliases[$origType]['model'] ?? $origType;
-            $effectiveKey   = $morphAliases[$origType]['key']   ?? 'id';
-        }
-
-        $relModel = $loaded[$effectiveClass][$r->reviewable_id] ?? null;
-
-        // Восстанавливаем полиморфную связь "reviewable" (без лишних запросов)
-        if ($relModel) {
-            $review->setRelation('reviewable', $relModel);
-        } else {
-            // Чтобы не триггерить ленивую загрузку при сериализации
-            $review->setRelation('reviewable', null);
-        }
-    }
-
-    // 7) Подменяем коллекцию в пагинаторе на гидрированную
-    $paginator->setCollection($hydrated);
-
-    $resource = config('backpack.reviews.resource.medium', 'Backpack\Reviews\app\Http\Resources\ReviewMediumResource');
-    // 8) Возвращаем ресурсы как и раньше
-    if($collection) {
-      return new $collection($paginator, ['resource' => $resource, 'rating_count' => $ratingCount, 'reviews_avg' => $reviewsAvg]);
-    }else {
-      return $resource::collection($paginator);
-    }
-}
+      }
+  }
 
   protected function buildReviewableTypeMap(array $morphAliases): array
   {
@@ -292,7 +323,7 @@ public function indexRelation(Request $request, $collection = null)
 
       $map[$modelClass] = [
         'model' => $modelClass,
-        'key' => 'id',
+        'key' => $definition['key'] ?? 'id',
         'country_field' => null,
       ];
     }
@@ -319,58 +350,72 @@ public function indexRelation(Request $request, $collection = null)
       return;
     }
 
+    $countryCode = $context['country'] ?? null;
+    $countryCode = $countryCode ? mb_strtolower($countryCode) : null;
+
     $constraints = [];
-    $knownTypes = [];
-
     foreach ($typeMap as $reviewableType => $meta) {
-      $modelClass = $meta['model'] ?? null;
-      if (!$modelClass || !class_exists($modelClass)) {
-        continue;
+      $constraint = $this->makeReviewableConstraint($reviewableType, $meta, $countryCode, $context);
+      if ($constraint) {
+        $constraints[$reviewableType] = $constraint;
       }
-
-      $builder = $modelClass::query();
-      $key = $meta['key'] ?? 'id';
-      $countryField = $meta['country_field'] ?? null;
-      $countryCode = $context['country'] ?? null;
-      $table = $builder->getModel()->getTable();
-
-      $builder->select($table . '.' . $key);
-
-      if ($countryField && $countryCode) {
-        $builder->where($table . '.' . $countryField, $countryCode);
-      }
-
-      $builder = $this->applyAvailabilityScopeToBuilder($modelClass, $builder, $context);
-
-      $subAlias = 'rel_' . substr(md5($reviewableType), 0, 8);
-
-      $constraints[$reviewableType] = function (QueryBuilder $branch) use ($builder, $key, $subAlias) {
-        $branch->whereExists(function ($exists) use ($builder, $key, $subAlias) {
-          $exists->selectRaw('1')
-            ->fromSub(clone $builder, $subAlias)
-            ->whereColumn("{$subAlias}.{$key}", 'r.reviewable_id');
-        });
-      };
-
-      $knownTypes[] = $reviewableType;
     }
 
     if (empty($constraints)) {
       return;
     }
 
-    $query->where(function ($outer) use ($constraints, $knownTypes) {
+    $query->where(function (QueryBuilder $outer) use ($constraints) {
+      $knownTypes = array_keys($constraints);
+
       if (!empty($knownTypes)) {
         $outer->whereNotIn('r.reviewable_type', $knownTypes);
       }
 
       foreach ($constraints as $type => $constraint) {
-        $outer->orWhere(function ($branch) use ($type, $constraint) {
+        $outer->orWhere(function (QueryBuilder $branch) use ($type, $constraint) {
           $branch->where('r.reviewable_type', $type);
           $constraint($branch);
         });
       }
     });
+  }
+
+  protected function makeReviewableConstraint(string $reviewableType, array $meta, ?string $countryCode, array $context): ?callable
+  {
+    $modelClass = $meta['model'] ?? null;
+    if (!$modelClass || !class_exists($modelClass)) {
+      return null;
+    }
+
+    $builder = $modelClass::query();
+    $model = $builder->getModel();
+    $table = $model->getTable();
+
+    if (!Schema::hasTable($table)) {
+      return null;
+    }
+
+    $key = $meta['key'] ?? $model->getKeyName();
+    $countryField = $meta['country_field'] ?? null;
+
+    $builder->select("{$table}.{$key}");
+
+    if ($countryField && $countryCode) {
+      $builder->where("{$table}.{$countryField}", $countryCode);
+    }
+
+    $builder = $this->applyAvailabilityScopeToBuilder($modelClass, $builder, $context);
+
+    $alias = 'rel_' . substr(md5($reviewableType . $key), 0, 8);
+
+    return function (QueryBuilder $branch) use ($builder, $key, $alias) {
+      $branch->whereExists(function (QueryBuilder $exists) use ($builder, $key, $alias) {
+        $exists->selectRaw('1')
+          ->fromSub(clone $builder, $alias)
+          ->whereColumn("{$alias}.{$key}", 'r.reviewable_id');
+      });
+    };
   }
 
   protected function applyAvailabilityScopeToBuilder(string $modelClass, EloquentBuilder $builder, array $context): EloquentBuilder
@@ -394,6 +439,30 @@ public function indexRelation(Request $request, $collection = null)
     }
 
     return method_exists($modelClass, 'scopeReviewableAvailability');
+  }
+
+  protected function resolveCountryCode(Request $request): ?string
+  {
+    $input = $this->normalizeCountry($request->input('country'));
+    if ($input) {
+      return $input;
+    }
+
+    $headerCountry = $request->header('X-Region') ?? $request->header('X-Country');
+
+    return $this->normalizeCountry($headerCountry);
+  }
+
+  protected function normalizeCountry(?string $value): ?string
+  {
+    if (!$value) {
+      return null;
+    }
+
+    $cleaned = preg_replace('/[^a-zA-Z]/', '', $value);
+    $code = strtoupper(substr($cleaned, 0, 2));
+
+    return strlen($code) === 2 ? $code : null;
   }
 
 

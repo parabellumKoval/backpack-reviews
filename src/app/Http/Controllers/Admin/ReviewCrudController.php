@@ -2,6 +2,7 @@
 
 namespace Backpack\Reviews\app\Http\Controllers\Admin;
 
+use App\Support\ReviewRewardContext;
 use Backpack\CRUD\app\Http\Controllers\CrudController;
 use Backpack\CRUD\app\Library\CrudPanel\CrudPanelFacade as CRUD;
 
@@ -18,9 +19,8 @@ use ParabellumKoval\BackpackImages\Traits\HasImagesCrudComponents;
 class ReviewCrudController extends CrudController
 {
     use \Backpack\CRUD\app\Http\Controllers\Operations\ListOperation;
-    use \Backpack\CRUD\app\Http\Controllers\Operations\CreateOperation;
-    use \Backpack\CRUD\app\Http\Controllers\Operations\UpdateOperation;
-    // use \Backpack\CRUD\app\Http\Controllers\Operations\UpdateOperation  { update as traitUpdate; }
+    use \Backpack\CRUD\app\Http\Controllers\Operations\CreateOperation { store as traitStore; }
+    use \Backpack\CRUD\app\Http\Controllers\Operations\UpdateOperation { update as traitUpdate; }
     use \Backpack\CRUD\app\Http\Controllers\Operations\DeleteOperation;
     //use \Backpack\CRUD\app\Http\Controllers\Operations\ShowOperation;
     use \Backpack\CRUD\app\Http\Controllers\Operations\FetchOperation;
@@ -32,6 +32,8 @@ class ReviewCrudController extends CrudController
 
     use HasImagesCrudComponents;
 
+    protected array $reviewableDefinitions = [];
+
     public function setup()
     {
       $this->crud->setModel(AdminReview::class);
@@ -41,8 +43,19 @@ class ReviewCrudController extends CrudController
       $reviewable_types_list = \Settings::get('backpack.reviews.reviewable_types_list', []);
 
       $reviewable_options = [];
+      $this->reviewableDefinitions = [];
+
       foreach ($reviewable_types_list as $item) {
-          $reviewable_options[$item['model']] = $item['name'];
+          $modelClass = $this->normalizeReviewableClass($item['model'] ?? null);
+          $name = $item['name'] ?? null;
+
+          if (!$modelClass || !$name) {
+              continue;
+          }
+
+          $reviewable_options[$modelClass] = $name;
+          $item['model'] = $modelClass;
+          $this->reviewableDefinitions[$modelClass] = $item;
       }
       $this->reviewableList = $reviewable_options;
       
@@ -62,6 +75,30 @@ class ReviewCrudController extends CrudController
       $this->setupTreeList([
         'title' => 'Ответы к отзыву' 
       ]); 
+    }
+
+    public function store()
+    {
+        $context = app(ReviewRewardContext::class);
+        $context->skipRewards(request()->boolean('skip_reward', true));
+
+        try {
+            return $this->traitStore();
+        } finally {
+            $context->skipRewards(false);
+        }
+    }
+
+    public function update()
+    {
+        $context = app(ReviewRewardContext::class);
+        $context->skipRewards(request()->boolean('skip_reward', false));
+
+        try {
+            return $this->traitUpdate();
+        } finally {
+            $context->skipRewards(false);
+        }
     }
 
 
@@ -212,6 +249,14 @@ class ReviewCrudController extends CrudController
     protected function setupCreateOperation()
     {
        $this->crud->setValidation(ReviewRequest::class);
+        // allow inputs rendered inside conditional_fields to reach the model
+        $this->crud->setOperationSetting('saveAllInputsExcept', [
+            '_token',
+            '_method',
+            'http_referrer',
+            'current_tab',
+            'save_action',
+        ]);
 
         // TODO: remove setFromDb() and manually define Fields
         // $this->crud->setFromDb();
@@ -328,7 +373,8 @@ class ReviewCrudController extends CrudController
         'data_source' => $this->getReviewableFetchRoute() ?? url("/admin/api/product"),
         'allows_null' => true,
         'attributes' => $attrs,
-        'ajax' => true
+        'ajax' => true,
+        'key_column' => $this->getReviewableKeyColumn(),
       ]); 
 
       $this->crud->addField([
@@ -565,6 +611,12 @@ class ReviewCrudController extends CrudController
       ]);
 
       $this->crud->addField([
+        'name'  => 'skip_reward_toggle',
+        'type'  => 'custom_html',
+        'value' => $this->renderSkipRewardToggle(),
+      ]);
+
+      $this->crud->addField([
         'name'  => 'separator_6',
         'type'  => 'custom_html',
         'value' => '<hr>'
@@ -611,6 +663,25 @@ class ReviewCrudController extends CrudController
         $this->setupCreateOperation();
     }
 
+    protected function renderSkipRewardToggle(): string
+    {
+        $isCreate = $this->crud->getCurrentOperation() === 'create';
+        $default = $isCreate ? 1 : 0;
+        $checked = old('skip_reward', $default) ? 'checked' : '';
+        $id = 'skip_reward_toggle';
+
+        return <<<HTML
+<div class="form-group">
+  <div class="form-check">
+    <input type="hidden" name="skip_reward" value="0">
+    <input type="checkbox" class="form-check-input" id="{$id}" name="skip_reward" value="1" {$checked}>
+    <label class="form-check-label" for="{$id}">Не начислять вознаграждение за этот отзыв</label>
+  </div>
+  <p class="text-muted small mb-0">Когда включено, пользователю не будут начислены бонусы за этот отзыв.</p>
+</div>
+HTML;
+    }
+
     private function setEntry() {
       if($this->crud->getCurrentOperation() === 'update')
         $this->entry = $this->crud->getEntry(\Route::current()->parameter('id'));
@@ -633,10 +704,10 @@ class ReviewCrudController extends CrudController
     private function getReviewableTypeModel() {
       $model_string = $this->getReviewableType();
 
-      if($model_string === 'null')
+      if($model_string === 'null' || !$model_string)
         return null;
-      else
-        return $model_string;
+
+      return $this->normalizeReviewableClass($model_string);
     }
 
     private function getReviewableFetchRoute()
@@ -645,6 +716,12 @@ class ReviewCrudController extends CrudController
 
         if (!$model) {
             return null;
+        }
+
+        $definition = $this->getReviewableDefinition($model);
+
+        if (!empty($definition['fetch_helper_key'])) {
+            return route('backpack.helpers.fetch', ['key' => $definition['fetch_helper_key']]);
         }
 
         $helperKey = helper_fetch_key_for_model($model);
@@ -657,31 +734,69 @@ class ReviewCrudController extends CrudController
     }
 
     private function getReviewableName() {
-      if($this->getReviewableType())
-        return $this->reviewableList[$this->getReviewableType()] ?? 'Запись';
-      else
+      $type = $this->getReviewableType();
+
+      if(!$type || $type === 'null') {
         return 'Запись';
+      }
+
+      return $this->reviewableList[$type] ?? $this->reviewableList[$this->normalizeReviewableClass($type)] ?? 'Запись';
+    }
+
+    private function getReviewableDefinition(?string $model = null): array
+    {
+        $resolvedModel = $this->normalizeReviewableClass($model ?? $this->getReviewableTypeModel());
+
+        if (!$resolvedModel) {
+            return [];
+        }
+
+        return $this->reviewableDefinitions[$resolvedModel] ?? [];
+    }
+
+    private function getReviewableKeyColumn(): string
+    {
+        $model = $this->getReviewableTypeModel();
+        $definition = $this->getReviewableDefinition($model);
+
+        if ($model && class_exists($model)) {
+            $default = (new $model())->getKeyName();
+        } else {
+            $default = 'id';
+        }
+
+        return $definition['reviewable_key'] ?? $default;
+    }
+
+    private function normalizeReviewableClass(?string $class): ?string
+    {
+        if (!$class) {
+            return null;
+        }
+
+        return ltrim($class, '\\');
     }
 
     // CHANGE THIS
-    protected function fetchReviewable()
-    {
-        return $this->fetch([
-          'model' => \Backpack\Store\app\Models\Product::class, // required
-          'searchable_attributes' => ['name', 'code', 'slug'],
-          'paginate' => 50
-        ]);
-    }
+    // protected function fetchReviewable()
+    // {
+    //     return $this->fetch([
+    //       'model' => \Backpack\Store\app\Models\Product::class, // required
+    //       'searchable_attributes' => ['name', 'code', 'slug'],
+    //       'paginate' => 50
+    //     ]);
+    // }
 
 
-    protected function fetchParent()
-    {
-        return $this->fetch([
-          'model' => Backpack\Reviews\app\Models\Review::class, // required
-          'searchable_attributes' => ['id', 'text'],
-          'paginate' => 50
-        ]);
-    }
+    // protected function fetchParent()
+    // {
+    //     return $this->fetch([
+    //       'model' => Backpack\Reviews\app\Models\Review::class, // required
+    //       'searchable_attributes' => ['id', 'text'],
+    //       'paginate' => 50
+    //     ]);
+    // }
+
     // public function update($request){
     //   $requestData = \Request::all();
     //   $requestData['http_referrer'] = 'https://google.com';

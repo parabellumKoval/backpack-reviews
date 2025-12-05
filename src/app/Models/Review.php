@@ -418,6 +418,25 @@ class Review extends Model
         return 0;
       }
     }
+
+    public function getRatingAttribute($value)
+    {
+        return $this->normalizeNumericAttribute($value);
+    }
+
+    public function getLikesAttribute($value)
+    {
+        $normalized = $this->normalizeNumericAttribute($value);
+
+        return $normalized ?? 0;
+    }
+
+    public function getDislikesAttribute($value)
+    {
+        $normalized = $this->normalizeNumericAttribute($value);
+
+        return $normalized ?? 0;
+    }
     
     /**
      * getOwnerModelOrInfoAttribute
@@ -502,6 +521,24 @@ class Review extends Model
         $this->attributes['extras'] = !empty($normalized)
             ? json_encode($normalized, JSON_UNESCAPED_UNICODE)
             : null;
+    }
+
+    protected function normalizeNumericAttribute($value): ?int
+    {
+        if ($value instanceof \Illuminate\Support\Collection) {
+            $value = $value->first();
+        }
+
+        if (is_array($value)) {
+            $flattened = Arr::flatten($value);
+            $value = $flattened ? reset($flattened) : null;
+        }
+
+        if ($value === '' || $value === null) {
+            return null;
+        }
+
+        return is_numeric($value) ? (int) $value : null;
     }
 
     protected function normalizeExtrasValue($value): array
