@@ -774,7 +774,14 @@ HTML;
             return null;
         }
 
-        return ltrim($class, '\\');
+        $normalized = ltrim($class, '\\');
+
+        $map = [
+            \Backpack\Store\app\Models\Catalog::class => \App\Models\Product::class,
+            \Backpack\Store\app\Models\Product::class => \App\Models\Product::class,
+        ];
+
+        return $map[$normalized] ?? $normalized;
     }
 
     // CHANGE THIS

@@ -17,10 +17,12 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
     {
         // регистрируем Backpack field
         // \View::addNamespace('crud', base_path('vendor/backpack/crud/src/resources/views'));
-        View::addNamespace('crud', [
-            resource_path('views/vendor/backpack/crud'),
-            __DIR__.'/resources/views/vendor/backpack/crud',
-        ]);
+        $crudPaths = [__DIR__.'/resources/views/vendor/backpack/crud'];
+        $crudVendorPath = resource_path('views/vendor/backpack/crud');
+        if (is_dir($crudVendorPath)) {
+            array_unshift($crudPaths, $crudVendorPath);
+        }
+        View::addNamespace('crud', $crudPaths);
 
         // Register reviews namespace for custom columns
         View::addNamespace('reviews', __DIR__.'/resources/views/vendor/backpack/crud');

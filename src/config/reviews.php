@@ -55,6 +55,7 @@ return [
       'model' => 'App\Models\Product',
       'name' => 'Товар',
       'name_plur' => 'Товары',
+      'fetch_helper_key' => 'product_base',
     ],
     'article' => [
       'model' => 'Backpack\Articles\app\Models\Article',
@@ -70,11 +71,20 @@ return [
       'model' => 'Backpack\Store\app\Models\Catalog',
       'key' => 'group_id',
       'country_field' => 'country_code'
+    ],
+    'Backpack\Store\app\Models\Product' => [
+      'model' => 'Backpack\Store\app\Models\Catalog',
+      'key' => 'group_id',
+      'country_field' => 'country_code'
     ]
   ],
 
   // Reviewable Cards Configuration
   'reviewable_cards_config' => [
+    'App\Models\Product' => [
+      'view' => 'store::reviews.reviewable_card',
+      'edit_route' => 'product.edit',
+    ],
     'Backpack\Store\app\Models\Product' => [
       'view' => 'store::reviews.reviewable_card',
       'edit_route' => 'product.edit',

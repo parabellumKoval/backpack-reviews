@@ -40,20 +40,24 @@ class ReviewController extends \App\Http\Controllers\Controller
   
   public function amount(Request $request) {
     $videoOnly = $request->boolean('video');
-    $reviewable = request('reviewable_type', null);
-
-    // dd($reviewable, gettype($reviewable), $reviewable === 'null', $reviewable === null);
+    $reviewable = $request->input('reviewable_type');
+    $typeMap = $this->buildReviewableTypeMap(config('backpack.reviews.morph_aliases', []));
+    $reviewableTypes = $this->resolveReviewableTypeVariants($reviewable, $typeMap);
+    $filterNullType = $this->isNullReviewableType($reviewable);
 
     $amount = $this->review_model::query()
           ->select('ak_reviews.*')
           ->distinct('ak_reviews.id')
           ->root()
           ->moderated()
-          ->when($reviewable, function($query) use ($reviewable){
-            if($reviewable === 'null' || $reviewable === null) {
-              $query->whereNull('ak_reviews.reviewable_type');
-            }else {
-              $query->where('ak_reviews.reviewable_type', $reviewable);
+          ->when($filterNullType, function ($query) {
+            $query->whereNull('ak_reviews.reviewable_type');
+          })
+          ->when(!$filterNullType && !empty($reviewableTypes), function ($query) use ($reviewableTypes) {
+            if (count($reviewableTypes) === 1) {
+              $query->where('ak_reviews.reviewable_type', $reviewableTypes[0]);
+            } else {
+              $query->whereIn('ak_reviews.reviewable_type', $reviewableTypes);
             }
           })
           ->when($videoOnly, function ($query) {
@@ -72,13 +76,16 @@ class ReviewController extends \App\Http\Controllers\Controller
   public function index(Request $request) {
     
     $videoOnly = $request->boolean('video');
+    $reviewable = $request->input('reviewable_type');
+    $typeMap = $this->buildReviewableTypeMap(config('backpack.reviews.morph_aliases', []));
+    $reviewableTypes = $this->resolveReviewableTypeVariants($reviewable, $typeMap);
+    $filterNullType = $this->isNullReviewableType($reviewable);
 
     // $reviewable_id = request('reviewable_id');
     // if(request('reviewable_slug') && request('reviewable_type')) {
     //   $reviewable = request('reviewable_type')::where('slug', request('reviewable_slug'))->first();
     //   $reviewable_id = $reviewable? ($reviewable->parent_id ?? $reviewable->id): null;
     // }
-    $reviewable = request('reviewable_type', 'null');
 
     $reviews = $this->review_model::query()
               ->select('ak_reviews.*')
@@ -88,11 +95,14 @@ class ReviewController extends \App\Http\Controllers\Controller
               // ->when($reviewable_id, function($query) use($reviewable_id){
               //   $query->where('ak_reviews.reviewable_id', $reviewable_id);
               // })
-              ->when($reviewable, function($query) use ($reviewable){
-                if($reviewable === 'null' || $reviewable === null) {
-                  $query->whereNull('ak_reviews.reviewable_type');
-                }else {
-                  $query->where('ak_reviews.reviewable_type', $reviewable);
+              ->when($filterNullType, function ($query) {
+                $query->whereNull('ak_reviews.reviewable_type');
+              })
+              ->when(!$filterNullType && !empty($reviewableTypes), function ($query) use ($reviewableTypes) {
+                if (count($reviewableTypes) === 1) {
+                  $query->where('ak_reviews.reviewable_type', $reviewableTypes[0]);
+                } else {
+                  $query->whereIn('ak_reviews.reviewable_type', $reviewableTypes);
                 }
               })
               ->when($videoOnly, function ($query) {
@@ -133,6 +143,8 @@ class ReviewController extends \App\Http\Controllers\Controller
           'request' => $request,
       ];
       $reviewableTypeMap = $this->buildReviewableTypeMap($morphAliases);
+      $reviewableTypes = $this->resolveReviewableTypeVariants($request->input('reviewable_type'), $reviewableTypeMap);
+      $filterNullType = $this->isNullReviewableType($request->input('reviewable_type'));
 
       // 1) Разруливаем фильтр по слагу/типу → получаем reviewable_id
       $reviewableId = $request->input('reviewable_id');
@@ -153,8 +165,15 @@ class ReviewController extends \App\Http\Controllers\Controller
           ->when($reviewableId, function ($q) use ($reviewableId) {
               $q->where('r.reviewable_id', $reviewableId);
           })
-          ->when($request->filled('reviewable_type'), function ($q) use ($request) {
-              $q->where('r.reviewable_type', $request->input('reviewable_type'));
+          ->when($filterNullType, function ($q) {
+              $q->whereNull('r.reviewable_type');
+          })
+          ->when(!$filterNullType && !empty($reviewableTypes), function ($q) use ($reviewableTypes) {
+              if (count($reviewableTypes) === 1) {
+                  $q->where('r.reviewable_type', $reviewableTypes[0]);
+              } else {
+                  $q->whereIn('r.reviewable_type', $reviewableTypes);
+              }
           })
           ->when($videoOnly, function ($q) {
               $q->where('r.is_video', true);
@@ -223,8 +242,7 @@ class ReviewController extends \App\Http\Controllers\Controller
       foreach ($rows as $row) {
           $origType = $row->reviewable_type;
           $effectiveClass = $origType;
-          // ВНИМАНИЕ !!!! ПОМЕНЯТЬ
-          $effectiveKey   = 'group_id';
+          $effectiveKey   = 'id';
 
           if (isset($morphAliases[$origType])) {
               $effectiveClass = $morphAliases[$origType]['model'] ?? $origType;
@@ -341,7 +359,42 @@ class ReviewController extends \App\Http\Controllers\Controller
       ];
     }
 
-    return $map;
+      return $map;
+  }
+
+  protected function resolveReviewableTypeVariants($type, array $typeMap): array
+  {
+    if ($this->isNullReviewableType($type)) {
+      return [];
+    }
+
+    $normalized = ReviewTypeResolver::normalizeMorphClass((string) $type);
+    $variants = array_filter([(string) $type, $normalized]);
+    $targetModel = $typeMap[$type]['model'] ?? null;
+
+    foreach ($typeMap as $candidateType => $meta) {
+      if ($candidateType === $type) {
+        continue;
+      }
+
+      $candidateModel = $meta['model'] ?? null;
+
+      if ($targetModel && $candidateModel === $targetModel) {
+        $variants[] = $candidateType;
+        continue;
+      }
+
+      if ($normalized && ReviewTypeResolver::normalizeMorphClass((string) $candidateType) === $normalized) {
+        $variants[] = $candidateType;
+      }
+    }
+
+    return array_values(array_unique(array_filter($variants)));
+  }
+
+  protected function isNullReviewableType($type): bool
+  {
+    return $type === null || $type === '' || $type === 'null';
   }
 
   protected function applyReviewableAvailabilityFilter(QueryBuilder $query, array $typeMap, array $context): void
