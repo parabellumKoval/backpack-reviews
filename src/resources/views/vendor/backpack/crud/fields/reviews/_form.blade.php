@@ -3,7 +3,7 @@
   <div class="row">
     <div class="form-group col-md-8">
       <label class="w-100">@lang('reviews::field.new_review')</label>
-      <textarea name="text" class="form-control" rows="4" required placeholder="@lang('reviews::field.text_placeholder')"></textarea>
+      <textarea name="text" class="form-control" rows="4" placeholder="@lang('reviews::field.text_placeholder')"></textarea>
     </div>
     <div class="col-md-4">
       <div class="form-group">
