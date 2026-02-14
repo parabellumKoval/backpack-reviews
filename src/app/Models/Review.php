@@ -23,7 +23,11 @@ use Throwable;
 use Backpack\Reviews\app\Events\ReviewChanged;
 use Backpack\Helpers\Traits\FormatsUniqAttribute;
 
-class Review extends Model
+use Backpack\Schedule\Contracts\SchedulableInterface;
+use Backpack\Schedule\Contracts\HasCrudCardInterface;
+use Backpack\Schedule\Traits\Schedulable;
+
+class Review extends Model implements SchedulableInterface, HasCrudCardInterface
 {
     use CrudTrait;
     use HasFactory;
@@ -31,6 +35,23 @@ class Review extends Model
     use HasTranslations;
     use HasImages;
     use FormatsUniqAttribute;
+    use Schedulable;
+    
+    protected string $schedulePublishField = 'is_moderated';
+    protected bool $scheduleOverwriteCreatedAt = true;
+    /**
+     * Override to prevent double json_decode on extras column.
+     * The NormalizedExtrasCast already decodes and normalizes the data.
+     */
+    public function shouldDecodeFake($column)
+    {
+        // extras is handled by NormalizedExtrasCast, so never decode it again
+        if ($column === 'extras') {
+            return false;
+        }
+
+        return parent::shouldDecodeFake($column);
+    }
     
     /*
     |--------------------------------------------------------------------------
@@ -69,7 +90,7 @@ class Review extends Model
     protected $casts = [
       'is_moderated' => 'bool',
       'is_video' => 'bool',
-      'extras' => 'array',
+      'extras' => \Backpack\Reviews\app\Casts\NormalizedExtrasCast::class,
       'video_poster' => 'array',
     ];
 
@@ -490,6 +511,28 @@ class Review extends Model
       return $owner ? [$owner] : null;
     }
 
+    public function getAdvantagesAttribute()
+    {
+        $value = $this->extras['advantages'] ?? null;
+
+        if (is_array($value)) {
+            return implode("\n", array_filter($value, 'is_string'));
+        }
+
+        return $value;
+    }
+
+    public function getFlawsAttribute()
+    {
+        $value = $this->extras['flaws'] ?? null;
+
+        if (is_array($value)) {
+            return implode("\n", array_filter($value, 'is_string'));
+        }
+
+        return $value;
+    }
+
     public function getExtrasOwnerIdAttribute() {
       return $this->resolveOwnerExtras()['id'] ?? null;
     }
@@ -509,6 +552,88 @@ class Review extends Model
     // public function getOwnerAttribute() {
     //   dd($this->extras['owner']);
     // }
+
+    /*
+    |--------------------------------------------------------------------------
+    | HasCrudCardInterface Implementation
+    |--------------------------------------------------------------------------
+    */
+    
+    /**
+     * Получить HTML карточки для отображения в CRUD списке
+     */
+    public function getCrudCardHtml(array $options = []): string
+    {
+        $textLimit = $options['text_limit'] ?? 80;
+        $showRating = $options['show_rating'] ?? true;
+        $compact = $options['compact'] ?? true;
+        
+        $text = $this->text ?? '';
+        $displayText = mb_strlen($text) > $textLimit 
+            ? mb_substr($text, 0, $textLimit) . '...' 
+            : ($text ?: 'Без текста');
+        
+        $rating = $this->rating ?? 0;
+        $isVideo = $this->is_video ?? false;
+        $isModerated = $this->is_moderated ?? false;
+        $editUrl = $this->getCrudEditUrl();
+        
+        // Rating stars
+        $starsHtml = '';
+        if ($showRating && $rating > 0) {
+            $starsHtml = '<div style="margin-bottom: 2px;">';
+            for ($i = 1; $i <= 5; $i++) {
+                $color = $i <= $rating ? '#f2c200' : '#ddd';
+                $starsHtml .= '<i class="la la-star" style="color: ' . $color . '; font-size: 11px;"></i>';
+            }
+            $starsHtml .= '</div>';
+        }
+        
+        // Status badge
+        $statusBadge = $isModerated 
+            ? '<span class="badge badge-success" style="font-size: 9px;">Опубликован</span>'
+            : '<span class="badge badge-warning" style="font-size: 9px;">Модерация</span>';
+        
+        // Icon
+        $iconBg = $isVideo ? '#e8f4fd' : '#f5f5f5';
+        $iconClass = $isVideo ? 'la-video' : 'la-comment';
+        $iconColor = $isVideo ? '#2196F3' : '#999';
+        
+        $html = '<div class="review-crud-card" style="display: flex; gap: 8px; padding: 6px; border: 1px solid #e0e0e0; border-radius: 4px; background: #fafafa; ' . ($compact ? 'max-width: 280px;' : '') . '">';
+        $html .= '<div style="flex-shrink: 0; width: 32px; height: 32px; background: ' . $iconBg . '; border-radius: 4px; display: flex; align-items: center; justify-content: center;">';
+        $html .= '<i class="la ' . $iconClass . '" style="font-size: 16px; color: ' . $iconColor . ';"></i>';
+        $html .= '</div>';
+        $html .= '<div style="flex-grow: 1; min-width: 0;">';
+        $html .= $starsHtml;
+        $html .= '<a href="' . e($editUrl) . '" style="color: #333; text-decoration: none; font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;" title="' . e($text) . '">';
+        $html .= e($displayText);
+        $html .= '</a>';
+        $html .= '<div style="margin-top: 2px;">' . $statusBadge . '</div>';
+        $html .= '</div></div>';
+        
+        return $html;
+    }
+
+    /**
+     * Получить URL для редактирования записи в админке
+     */
+    public function getCrudEditUrl(): ?string
+    {
+        return backpack_url('review/' . $this->id . '/edit');
+    }
+
+    /**
+     * Получить название записи для отображения
+     */
+    public function getCrudCardTitle(): string
+    {
+        $text = $this->text ?? '';
+        if (mb_strlen($text) > 50) {
+            return mb_substr($text, 0, 50) . '...';
+        }
+        return $text ?: 'Отзыв #' . $this->id;
+    }
+
     /*
     |--------------------------------------------------------------------------
     | MUTATORS
@@ -552,6 +677,13 @@ class Review extends Model
             $extras['owner'] = $this->normalizeOwnerData($extras['owner'], $previous['owner'] ?? null);
         } elseif (isset($previous['owner'])) {
             $extras['owner'] = $previous['owner'];
+        }
+
+        // Normalize advantages and flaws to strings (they may come as arrays from AI generation)
+        foreach (['advantages', 'flaws'] as $key) {
+            if (isset($extras[$key]) && is_array($extras[$key])) {
+                $extras[$key] = implode("\n", array_filter($extras[$key], 'is_string'));
+            }
         }
 
         return array_filter($extras, function ($item) {

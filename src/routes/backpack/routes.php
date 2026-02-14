@@ -1,4 +1,5 @@
 <?php
+use Backpack\Reviews\app\Http\Controllers\Admin\GoogleReviewOAuthController;
 use Backpack\Reviews\app\Http\Controllers\Api\ReviewAdminApiController;
 
 Route::group([
@@ -7,11 +8,17 @@ Route::group([
   'namespace'  => 'Backpack\Reviews\app\Http\Controllers\Admin',
 ], function () { 
     Route::crud('review', 'ReviewCrudController');
+    Route::crud('google-review', 'GoogleReviewCrudController');
     Route::post('review/{id}/toggle', [
         'as' => 'reviews.toggle',
         'uses' => 'ReviewCrudController@toggleColumnRouter',
         'operation' => 'list',
     ]);
+
+    Route::get('reviews/google/oauth', [GoogleReviewOAuthController::class, 'redirect'])
+        ->name('bp.reviews.google.oauth');
+    Route::get('reviews/google/callback', [GoogleReviewOAuthController::class, 'callback'])
+        ->name('bp.reviews.google.callback');
 });
 
 

@@ -1,0 +1,62 @@
+You are generating authentic, diverse product reviews. Each review must be COMPLETELY UNIQUE in structure, tone, and content.
+
+PRODUCT:
+- Name: {{PRODUCT_NAME}}
+- Category: {{PRODUCT_CATEGORY}}
+- Short description: {{PRODUCT_DESCRIPTION}}
+
+LANGUAGE: Write all reviews in {{LANGUAGE}} only.
+
+CRITICAL RULES FOR DIVERSITY:
+1. Each review MUST have a completely different structure and opening
+2. NEVER start multiple reviews the same way
+3. Vary review lengths: some very short (1-2 sentences), some medium (2-3 sentences), keep them SHORT and natural
+4. Only 2 out of 10 reviews should mention the product name (and translate/adapt it naturally to {{LANGUAGE}})
+5. Mix different perspectives: quality, delivery, experience, value, gift, etc.
+6. DO NOT use the original product name verbatim - if mentioning, describe it naturally in {{LANGUAGE}}
+7. Most reviews should be 1-3 sentences MAX, like real people write
+
+FORBIDDEN PATTERNS (NEVER use):
+- Starting with "Замовила/Замовив [product]..."
+- Using the exact product code/SKU from the name
+- Quotation marks around phrases like "на пробу"
+- Long 3-4 paragraph reviews
+- Similar sentence structures across reviews
+- Repeating the same opening words
+
+GOOD VARIETY (use different structures):
+- Direct: "Чудово!" / "Супер!"
+- Experience: "П'ю тиждень - задоволена"
+- Recommendation: "Раджу"
+- Comparison: "Краще ніж в магазині"
+- Repeat: "Беру вже не вперше"
+- Gift: "Брала мамі"
+- Skeptic: "Не очікувала, але сподобалось"
+- Simple: "Все ок, дякую"
+- Detail: "Аромат супер"
+- Emotion: "Нарешті знайшла те що шукала!"
+
+USERS (write 1 review per user, matching their personality):
+{{USERS_DATA}}
+
+RATINGS for each user: {{RATINGS_DATA}}
+
+Each review must reflect that user's:
+- Age/gender (young people write differently than older)
+- Character and personality  
+- Literacy level (1-10): low = casual/typos, high = proper grammar
+- Emoji usage preference
+- Message length preference (most should be SHORT)
+
+OUTPUT: Return JSON array with {{COUNT}} objects:
+[
+  {"user_index": 0, "text": "...", "advantages": [...], "flaws": [...]},
+  ...
+]
+
+EXTRAS (advantages/flaws):
+- Only ~70% of reviews should have them, rest use empty arrays []
+- Advantages: 1-2 short points max
+- Flaws: 0-1 very minor point (for 5★ almost none)
+
+Return ONLY valid JSON array, no markdown.

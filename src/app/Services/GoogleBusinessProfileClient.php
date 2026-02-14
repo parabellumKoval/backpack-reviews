@@ -1,0 +1,227 @@
+<?php
+
+namespace Backpack\Reviews\app\Services;
+
+use Backpack\Reviews\app\Models\GoogleReviewConnection;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Http;
+use Backpack\Settings\Facades\Settings;
+use Illuminate\Support\Str;
+use RuntimeException;
+
+class GoogleBusinessProfileClient
+{
+    protected array $config;
+
+    public function __construct()
+    {
+        $this->config = config('backpack.reviews.google', []);
+    }
+
+    public function isEnabled(): bool
+    {
+        return (bool) Settings::get('rw.google.enabled', false);
+    }
+
+    public function getClientId(): ?string
+    {
+        return Settings::get('rw.google.client_id');
+    }
+
+    public function getClientSecret(): ?string
+    {
+        return Settings::get('rw.google.client_secret');
+    }
+
+    public function getRedirectUri(): ?string
+    {
+        return Settings::get('rw.google.redirect_uri');
+    }
+
+    public function buildAuthUrl(string $state, array $overrides = []): string
+    {
+        $clientId = $this->getClientId();
+        $redirectUri = $this->getRedirectUri();
+        if (!$clientId || !$redirectUri) {
+            throw new RuntimeException('Google OAuth client_id or redirect_uri is missing.');
+        }
+
+        $authUrl = $this->config['auth_url'] ?? 'https://accounts.google.com/o/oauth2/v2/auth';
+        $scopes = $this->config['scopes'] ?? [];
+        $params = array_merge([
+            'client_id' => $clientId,
+            'redirect_uri' => $redirectUri,
+            'response_type' => 'code',
+            'scope' => implode(' ', $scopes),
+            'access_type' => $this->config['access_type'] ?? 'offline',
+            'prompt' => $this->config['prompt'] ?? 'consent',
+            'state' => $state,
+        ], $overrides);
+
+        return $authUrl . '?' . http_build_query($params);
+    }
+
+    public function exchangeCode(string $code): array
+    {
+        $clientId = $this->getClientId();
+        $clientSecret = $this->getClientSecret();
+        $redirectUri = $this->getRedirectUri();
+        if (!$clientId || !$clientSecret || !$redirectUri) {
+            throw new RuntimeException('Google OAuth credentials are not configured.');
+        }
+
+        $tokenUrl = $this->config['token_url'] ?? 'https://oauth2.googleapis.com/token';
+        $response = Http::asForm()->post($tokenUrl, [
+            'code' => $code,
+            'client_id' => $clientId,
+            'client_secret' => $clientSecret,
+            'redirect_uri' => $redirectUri,
+            'grant_type' => 'authorization_code',
+        ]);
+
+        if (!$response->ok()) {
+            throw new RuntimeException('Failed to exchange OAuth code: ' . $response->body());
+        }
+
+        return $response->json() ?? [];
+    }
+
+    public function refreshAccessToken(GoogleReviewConnection $connection): array
+    {
+        $clientId = $this->getClientId();
+        $clientSecret = $this->getClientSecret();
+        if (!$clientId || !$clientSecret) {
+            throw new RuntimeException('Google OAuth credentials are not configured.');
+        }
+        if (!$connection->refresh_token) {
+            throw new RuntimeException('Google refresh_token is missing.');
+        }
+
+        $tokenUrl = $this->config['token_url'] ?? 'https://oauth2.googleapis.com/token';
+        $response = Http::asForm()->post($tokenUrl, [
+            'client_id' => $clientId,
+            'client_secret' => $clientSecret,
+            'refresh_token' => $connection->refresh_token,
+            'grant_type' => 'refresh_token',
+        ]);
+
+        if (!$response->ok()) {
+            throw new RuntimeException('Failed to refresh OAuth token: ' . $response->body());
+        }
+
+        return $response->json() ?? [];
+    }
+
+    public function ensureAccessToken(GoogleReviewConnection $connection): string
+    {
+        $leeway = (int) ($this->config['token_leeway'] ?? 60);
+        $expiresAt = $connection->token_expires_at;
+        $shouldRefresh = !$connection->access_token;
+
+        if ($expiresAt instanceof Carbon) {
+            $shouldRefresh = $shouldRefresh || $expiresAt->lte(now()->addSeconds($leeway));
+        }
+
+        if ($shouldRefresh) {
+            $tokens = $this->refreshAccessToken($connection);
+            $connection->access_token = Arr::get($tokens, 'access_token', $connection->access_token);
+            $connection->token_type = Arr::get($tokens, 'token_type', $connection->token_type);
+            $connection->scope = Arr::get($tokens, 'scope', $connection->scope);
+            $connection->token_expires_at = $this->resolveExpiresAt($tokens);
+            $connection->meta = array_merge($connection->meta ?? [], ['token' => $tokens]);
+            $connection->save();
+        }
+
+        if (!$connection->access_token) {
+            throw new RuntimeException('Access token not available.');
+        }
+
+        return $connection->access_token;
+    }
+
+    public function listAccounts(string $accessToken): array
+    {
+        $baseUrl = rtrim($this->config['api_base'] ?? 'https://mybusiness.googleapis.com/v4', '/');
+        $response = Http::withToken($accessToken)->get($baseUrl . '/accounts', [
+            'pageSize' => $this->config['accounts_page_size'] ?? 100,
+        ]);
+
+        if (!$response->ok()) {
+            throw new RuntimeException('Failed to fetch accounts: ' . $response->body());
+        }
+
+        return $response->json('accounts') ?? [];
+    }
+
+    public function listLocations(string $accessToken, string $accountName): array
+    {
+        $baseUrl = rtrim($this->config['api_base'] ?? 'https://mybusiness.googleapis.com/v4', '/');
+        $readMask = $this->config['location_read_mask']
+            ?? 'name,title,storeCode,languageCode,storefrontAddress';
+
+        $response = Http::withToken($accessToken)->get($baseUrl . '/' . ltrim($accountName, '/') . '/locations', [
+            'pageSize' => $this->config['locations_page_size'] ?? 100,
+            'readMask' => $readMask,
+        ]);
+
+        if (!$response->ok()) {
+            throw new RuntimeException('Failed to fetch locations: ' . $response->body());
+        }
+
+        return $response->json('locations') ?? [];
+    }
+
+    public function listReviews(string $accessToken, string $locationName, ?string $pageToken = null): array
+    {
+        $baseUrl = rtrim($this->config['api_base'] ?? 'https://mybusiness.googleapis.com/v4', '/');
+        $query = [
+            'pageSize' => $this->config['reviews_page_size'] ?? 50,
+        ];
+        if ($pageToken) {
+            $query['pageToken'] = $pageToken;
+        }
+        if (!empty($this->config['reviews_order_by'])) {
+            $query['orderBy'] = $this->config['reviews_order_by'];
+        }
+
+        $response = Http::withToken($accessToken)->get($baseUrl . '/' . ltrim($locationName, '/') . '/reviews', $query);
+
+        if (!$response->ok()) {
+            throw new RuntimeException('Failed to fetch reviews: ' . $response->body());
+        }
+
+        return [
+            'reviews' => $response->json('reviews') ?? [],
+            'nextPageToken' => $response->json('nextPageToken'),
+        ];
+    }
+
+    protected function resolveExpiresAt(array $tokenResponse): ?Carbon
+    {
+        $expiresIn = Arr::get($tokenResponse, 'expires_in');
+        if (!$expiresIn) {
+            return null;
+        }
+
+        return now()->addSeconds((int) $expiresIn);
+    }
+
+    public function normalizeAccountId(?string $accountName): ?string
+    {
+        if (!$accountName) {
+            return null;
+        }
+
+        return Str::afterLast($accountName, '/');
+    }
+
+    public function normalizeLocationId(?string $locationName): ?string
+    {
+        if (!$locationName) {
+            return null;
+        }
+
+        return Str::afterLast($locationName, '/');
+    }
+}

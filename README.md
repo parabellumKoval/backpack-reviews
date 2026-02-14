@@ -50,6 +50,10 @@ php artisan vendor:publish --provider="Backpack\Reviews\ServiceProvider" --tag="
 php artisan db:seed --class="Backpack\Reviews\database\seeders\ReviewSeeder"
 ```
 
+## Google Business Profile
+
+See `GOOGLE_BUSINESS_PROFILE.md` for OAuth setup, sync commands, and API usage.
+
 ## Security
 
 If you discover any security related issues, please email 

@@ -10,11 +10,20 @@ use Backpack\Reviews\app\Services\ReviewsAttachService;
 use Backpack\Reviews\app\Models\Review;
 use Backpack\Reviews\app\Models\Admin\Review as ReviewAdmin;
 use Backpack\Reviews\app\Observers\ReviewObserver;
+use Backpack\Reviews\app\Console\Commands\GenerateProductReviews;
+use Backpack\Reviews\app\Console\Commands\SyncGoogleReviews;
 
 class ServiceProvider extends \Illuminate\Support\ServiceProvider
 {   
     public function boot()
     {
+        // Register console commands
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                GenerateProductReviews::class,
+                SyncGoogleReviews::class,
+            ]);
+        }
         // регистрируем Backpack field
         // \View::addNamespace('crud', base_path('vendor/backpack/crud/src/resources/views'));
         $crudPaths = [__DIR__.'/resources/views/vendor/backpack/crud'];

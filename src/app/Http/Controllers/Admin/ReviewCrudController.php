@@ -9,6 +9,8 @@ use Backpack\CRUD\app\Library\CrudPanel\CrudPanelFacade as CRUD;
 use Backpack\Reviews\app\Http\Requests\ReviewRequest;
 use Backpack\Reviews\app\Models\Admin\Review as AdminReview;
 
+use Backpack\Schedule\Traits\HasScheduleFields;
+
 use ParabellumKoval\BackpackImages\Traits\HasImagesCrudComponents;
 
 /**
@@ -31,6 +33,7 @@ class ReviewCrudController extends CrudController
     use \App\Http\Controllers\Admin\Traits\ReviewCrud;
 
     use HasImagesCrudComponents;
+    use HasScheduleFields;
 
     protected array $reviewableDefinitions = [];
 
@@ -350,7 +353,7 @@ class ReviewCrudController extends CrudController
         'label' => 'Тип связанной модели',
         'type' => 'select_from_array',
         'options' => $this->reviewableList,
-        'value' => $this->getReviewableType(),
+        'value' => $this->normalizeReviewableClass($this->getReviewableType()),
         'attributes' => $js_attributes,
         'allows_null' => true,
         'default' => null,
@@ -654,6 +657,8 @@ class ReviewCrudController extends CrudController
         ]
       ]);
 
+      $this->addScheduleFields(['tab' => 'Таймер']);
+
       // Trait
       $this->createOperation();
     }
@@ -693,18 +698,18 @@ HTML;
       $reviewable_type = \Request::get('reviewable_type');
 
       if(\Request::has('reviewable_type')){
-        return $reviewable_type? $reviewable_type: 'null';
+        return $reviewable_type ?: null;
       } elseif($this->entry && $this->entry->reviewable_type){
         return $this->entry->reviewable_type;
       } else {
-        return 'null';
+        return null;
       }
     }
 
     private function getReviewableTypeModel() {
       $model_string = $this->getReviewableType();
 
-      if($model_string === 'null' || !$model_string)
+      if (!$model_string)
         return null;
 
       return $this->normalizeReviewableClass($model_string);

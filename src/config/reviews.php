@@ -146,5 +146,23 @@ return [
     'extras' => [
       'rules' => 'nullable|array'
     ]
-  ]
+  ],
+
+  'google' => [
+    'auth_url' => 'https://accounts.google.com/o/oauth2/v2/auth',
+    'token_url' => 'https://oauth2.googleapis.com/token',
+    'api_base' => 'https://mybusiness.googleapis.com/v4',
+    'scopes' => [
+      'https://www.googleapis.com/auth/business.manage',
+    ],
+    'access_type' => 'offline',
+    'prompt' => 'consent',
+    'token_leeway' => 60,
+    'accounts_page_size' => 100,
+    'locations_page_size' => 100,
+    'reviews_page_size' => 50,
+    'reviews_order_by' => 'updateTime desc',
+    'location_read_mask' => 'name,title,storeCode,languageCode,storefrontAddress',
+    'per_page' => 12,
+  ],
 ];

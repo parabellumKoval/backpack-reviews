@@ -19,5 +19,12 @@ Route::prefix('api/review')->middleware(['api', Backpack\Reviews\app\Http\Middle
         Route::post('', 'create')->middleware('api');
         
         Route::post('{id}/like', 'likeOrDislike')->middleware('api');
-
+        
 });
+
+Route::prefix('api/google-reviews')->middleware(['api'])
+    ->controller(Backpack\Reviews\app\Http\Controllers\Api\GoogleReviewController::class)
+    ->group(function () {
+        Route::get('', 'index');
+        Route::get('{googleReview}', 'show');
+    });
