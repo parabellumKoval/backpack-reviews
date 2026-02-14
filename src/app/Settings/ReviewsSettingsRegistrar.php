@@ -33,46 +33,41 @@ class ReviewsSettingsRegistrar implements SettingsRegistrarInterface
                     ->cast('bool')
                     ->hint('Настройка будет применена глобально на всем сайте')
                 );
+            });
 
+            $group->page('Google Business Profile', function ($page) {
                 $page->add(Field::make('rw.google.enabled', 'checkbox')
                     ->label('Google отзывы: включить')
                     ->default(false)
                     ->cast('bool')
-                    ->tab('Google Business Profile')
                 );
 
                 $page->add(Field::make('rw.google.client_id', 'text')
                     ->label('Google OAuth Client ID')
                     ->default('')
                     ->cast('string')
-                    ->tab('Google Business Profile')
                 );
 
                 $page->add(Field::make('rw.google.client_secret', 'password')
                     ->label('Google OAuth Client Secret')
                     ->default('')
                     ->cast('string')
-                    ->tab('Google Business Profile')
                 );
 
                 $page->add(Field::make('rw.google.redirect_uri', 'text')
                     ->label('OAuth Redirect URI')
                     ->default('')
                     ->cast('string')
-                    ->tab('Google Business Profile')
                 );
 
-                if (!app()->runningInConsole()) {
-                    $oauthUrl = Route::has('bp.reviews.google.oauth')
-                        ? route('bp.reviews.google.oauth')
-                        : url('admin/reviews/google/oauth');
+                $oauthUrl = Route::has('bp.reviews.google.oauth')
+                    ? route('bp.reviews.google.oauth')
+                    : url('admin/reviews/google/oauth');
 
-                    $page->add(Field::make('rw.google.connect', 'custom_html')
-                        ->label('Подключение')
-                        ->tab('Google Business Profile')
-                        ->value('<a class="btn btn-primary" href="' . e($oauthUrl) . '">Подключить Google Business Profile</a>')
-                    );
-                }
+                $page->add(Field::make('rw.google.connect', 'custom_html')
+                    ->label('Подключение')
+                    ->default('<a class="btn btn-primary" href="' . e($oauthUrl) . '">Подключить Google Business Profile</a>')
+                );
             });
 
             $reviewable_models = \Settings::get('backpack.reviews.reviewable_types_list');
