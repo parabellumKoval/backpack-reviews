@@ -6,6 +6,7 @@ use Backpack\Reviews\app\Models\GoogleReviewConnection;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Backpack\Settings\Facades\Settings;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -64,10 +65,22 @@ class GoogleBusinessProfileClient
 
     public function exchangeCode(string $code): array
     {
+        Log::info('google_oauth_client.exchange_code.request', [
+            'code_len' => strlen($code),
+            'has_client_id' => !empty($this->getClientId()),
+            'has_client_secret' => !empty($this->getClientSecret()),
+            'redirect_uri' => $this->getRedirectUri(),
+        ]);
+
         $clientId = $this->getClientId();
         $clientSecret = $this->getClientSecret();
         $redirectUri = $this->getRedirectUri();
         if (!$clientId || !$clientSecret || !$redirectUri) {
+            Log::warning('google_oauth_client.exchange_code.misconfigured', [
+                'has_client_id' => !empty($clientId),
+                'has_client_secret' => !empty($clientSecret),
+                'has_redirect_uri' => !empty($redirectUri),
+            ]);
             throw new RuntimeException('Google OAuth credentials are not configured.');
         }
 
@@ -81,10 +94,22 @@ class GoogleBusinessProfileClient
         ]);
 
         if (!$response->ok()) {
+            Log::error('google_oauth_client.exchange_code.http_error', [
+                'status' => $response->status(),
+                'response_body' => Str::limit($response->body(), 1000),
+            ]);
             throw new RuntimeException('Failed to exchange OAuth code: ' . $response->body());
         }
 
-        return $response->json() ?? [];
+        $payload = $response->json() ?? [];
+        Log::info('google_oauth_client.exchange_code.response', [
+            'has_access_token' => !empty(Arr::get($payload, 'access_token')),
+            'has_refresh_token' => !empty(Arr::get($payload, 'refresh_token')),
+            'token_type' => Arr::get($payload, 'token_type'),
+            'expires_in' => Arr::get($payload, 'expires_in'),
+        ]);
+
+        return $payload;
     }
 
     public function refreshAccessToken(GoogleReviewConnection $connection): array
