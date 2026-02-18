@@ -111,7 +111,12 @@ class GoogleReviewsSyncService
         $pageToken = null;
 
         do {
-            $payload = $this->client->listReviews($accessToken, $location->location_name, $pageToken);
+            $payload = $this->client->listReviews(
+                $accessToken,
+                $location->location_name,
+                $pageToken,
+                $location->account_name
+            );
             $reviews = $payload['reviews'] ?? [];
             foreach ($reviews as $reviewPayload) {
                 $result = $this->upsertReview($location, $reviewPayload);

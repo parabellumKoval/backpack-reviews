@@ -167,9 +167,15 @@ class GoogleBusinessProfileClient
 
     public function listAccounts(string $accessToken): array
     {
-        $baseUrl = rtrim($this->config['api_base'] ?? 'https://mybusiness.googleapis.com/v4', '/');
+        $baseUrl = rtrim(
+            $this->config['accounts_api_base']
+                ?? $this->config['api_base']
+                ?? 'https://mybusinessaccountmanagement.googleapis.com/v1',
+            '/'
+        );
         $response = Http::withToken($accessToken)->get($baseUrl . '/accounts', [
-            'pageSize' => $this->config['accounts_page_size'] ?? 100,
+            // Account Management API limits pageSize to 20.
+            'pageSize' => min((int) ($this->config['accounts_page_size'] ?? 20), 20),
         ]);
 
         if (!$response->ok()) {
@@ -181,14 +187,31 @@ class GoogleBusinessProfileClient
 
     public function listLocations(string $accessToken, string $accountName): array
     {
-        $baseUrl = rtrim($this->config['api_base'] ?? 'https://mybusiness.googleapis.com/v4', '/');
+        $baseUrl = rtrim(
+            $this->config['locations_api_base']
+                ?? $this->config['api_base']
+                ?? 'https://mybusinessbusinessinformation.googleapis.com/v1',
+            '/'
+        );
         $readMask = $this->config['location_read_mask']
             ?? 'name,title,storeCode,languageCode,storefrontAddress';
 
-        $response = Http::withToken($accessToken)->get($baseUrl . '/' . ltrim($accountName, '/') . '/locations', [
+        $accountName = ltrim($accountName, '/');
+        $response = Http::withToken($accessToken)->get($baseUrl . '/' . $accountName . '/locations', [
             'pageSize' => $this->config['locations_page_size'] ?? 100,
             'readMask' => $readMask,
         ]);
+
+        // Backward compatibility for legacy deployments that still use v4 endpoints.
+        if (!$response->ok() && (int) $response->status() === 404) {
+            $legacyBaseUrl = rtrim($this->config['api_base'] ?? 'https://mybusiness.googleapis.com/v4', '/');
+            if ($legacyBaseUrl !== $baseUrl) {
+                $response = Http::withToken($accessToken)->get($legacyBaseUrl . '/' . $accountName . '/locations', [
+                    'pageSize' => $this->config['locations_page_size'] ?? 100,
+                    'readMask' => $readMask,
+                ]);
+            }
+        }
 
         if (!$response->ok()) {
             throw new RuntimeException('Failed to fetch locations: ' . $response->body());
@@ -197,9 +220,20 @@ class GoogleBusinessProfileClient
         return $response->json('locations') ?? [];
     }
 
-    public function listReviews(string $accessToken, string $locationName, ?string $pageToken = null): array
+    public function listReviews(
+        string $accessToken,
+        string $locationName,
+        ?string $pageToken = null,
+        ?string $accountName = null
+    ): array
     {
-        $baseUrl = rtrim($this->config['api_base'] ?? 'https://mybusiness.googleapis.com/v4', '/');
+        $baseUrl = rtrim(
+            $this->config['reviews_api_base']
+                ?? $this->config['api_base']
+                ?? 'https://mybusiness.googleapis.com/v4',
+            '/'
+        );
+        $locationResource = $this->resolveReviewLocationResource($locationName, $accountName);
         $query = [
             'pageSize' => $this->config['reviews_page_size'] ?? 50,
         ];
@@ -210,7 +244,7 @@ class GoogleBusinessProfileClient
             $query['orderBy'] = $this->config['reviews_order_by'];
         }
 
-        $response = Http::withToken($accessToken)->get($baseUrl . '/' . ltrim($locationName, '/') . '/reviews', $query);
+        $response = Http::withToken($accessToken)->get($baseUrl . '/' . ltrim($locationResource, '/') . '/reviews', $query);
 
         if (!$response->ok()) {
             throw new RuntimeException('Failed to fetch reviews: ' . $response->body());
@@ -220,6 +254,21 @@ class GoogleBusinessProfileClient
             'reviews' => $response->json('reviews') ?? [],
             'nextPageToken' => $response->json('nextPageToken'),
         ];
+    }
+
+    protected function resolveReviewLocationResource(string $locationName, ?string $accountName = null): string
+    {
+        $locationName = ltrim($locationName, '/');
+        if (Str::startsWith($locationName, 'accounts/')) {
+            return $locationName;
+        }
+
+        $accountName = $accountName ? ltrim($accountName, '/') : null;
+        if ($accountName && Str::startsWith($accountName, 'accounts/') && Str::startsWith($locationName, 'locations/')) {
+            return $accountName . '/' . $locationName;
+        }
+
+        return $locationName;
     }
 
     protected function resolveExpiresAt(array $tokenResponse): ?Carbon
