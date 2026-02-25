@@ -28,6 +28,8 @@ class ReviewMediumResource extends JsonResource
         'owner' => $this->ownerModelOrInfo,
         'video' => $this->videoData(true),
         'is_video' => (bool) $this->is_video,
+        'review_type' => $this->resolveReviewType(),
+        'photos' => $this->photoGalleryForApi(),
         'extras' => $clear_extras,
         'children' => self::collection($this->children),
         'lang' => $this->lang,

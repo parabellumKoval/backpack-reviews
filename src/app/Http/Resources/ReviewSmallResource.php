@@ -23,6 +23,8 @@ class ReviewSmallResource extends JsonResource
         'owner' => $this->ownerModelOrInfo,
         'video' => $this->videoData(),
         'is_video' => (bool) $this->is_video,
+        'review_type' => $this->resolveReviewType(),
+        'photos' => $this->photoGalleryForApi(),
         'lang' => $this->lang,
         'country' => $this->country,
         'created_at' => $this->created_at

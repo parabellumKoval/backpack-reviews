@@ -15,6 +15,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Backpack\Helpers\Traits\HasDisplayLabel;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
+use Intervention\Image\ImageManager;
 use ParabellumKoval\BackpackImages\Services\ImageUploader;
 use ParabellumKoval\BackpackImages\Support\ImageUploadOptions;
 use Symfony\Component\HttpFoundation\File\File as SymfonyFile;
@@ -22,6 +24,7 @@ use ParabellumKoval\BackpackImages\Traits\HasImages;
 use Throwable;
 use Backpack\Reviews\app\Events\ReviewChanged;
 use Backpack\Helpers\Traits\FormatsUniqAttribute;
+use Illuminate\Validation\ValidationException;
 
 use Backpack\Schedule\Contracts\SchedulableInterface;
 use Backpack\Schedule\Contracts\HasCrudCardInterface;
@@ -33,7 +36,11 @@ class Review extends Model implements SchedulableInterface, HasCrudCardInterface
     use HasFactory;
     use HasDisplayLabel;
     use HasTranslations;
-    use HasImages;
+    use HasImages {
+        processImagesBeforeSaving as protected processImagesBeforeSavingBase;
+        processSingleImage as protected processSingleImageBase;
+        isBase64Image as protected isBase64ImageBase;
+    }
     use FormatsUniqAttribute;
     use Schedulable;
     
@@ -74,9 +81,11 @@ class Review extends Model implements SchedulableInterface, HasCrudCardInterface
       'reviewable_type',
       'reviewable_id',
       'is_video',
+      'review_type',
       'video_url',
       'video_title',
       'video_poster',
+      'photo_gallery',
       'extras',
       'lang',
       'country',
@@ -90,6 +99,7 @@ class Review extends Model implements SchedulableInterface, HasCrudCardInterface
     protected $casts = [
       'is_moderated' => 'bool',
       'is_video' => 'bool',
+      'review_type' => 'string',
       'extras' => \Backpack\Reviews\app\Casts\NormalizedExtrasCast::class,
       'video_poster' => 'array',
     ];
@@ -125,6 +135,8 @@ class Review extends Model implements SchedulableInterface, HasCrudCardInterface
         "text" => $this->text,
         "video" => $this->videoData(true),
         "is_video" => (bool) $this->is_video,
+        "review_type" => $this->resolveReviewType(),
+        "photos" => $this->photoGalleryForApi(),
         "extras" => $this->extras,
         "lang" => $this->lang,
         "country" => $this->country,
@@ -146,17 +158,10 @@ class Review extends Model implements SchedulableInterface, HasCrudCardInterface
     protected static function booted(): void
     {
         static::saving(function (self $review): void {
-            $hasVideoContent = !empty($review->video_url)
-                || $review->hasVideoTitle()
-                || !empty($review->video_poster);
+            $reviewType = $review->resolveReviewType();
 
-            if ($review->isDirty('is_video')) {
-                $review->is_video = (bool) $review->is_video;
-            } elseif ($hasVideoContent) {
-                $review->is_video = true;
-            } else {
-                $review->is_video = false;
-            }
+            $review->review_type = $reviewType;
+            $review->is_video = $reviewType === 'video';
         });
 
         static::saved(function (self $review): void {
@@ -194,6 +199,34 @@ class Review extends Model implements SchedulableInterface, HasCrudCardInterface
                     ],
                     'column' => [
                         'label' => 'Постер видео',
+                    ],
+                ],
+                'photo_gallery' => [
+                    'label' => 'Фото отзыва',
+                    'tab' => null,
+                    'folder' => 'reviews/photos',
+                    'column_limit' => 5,
+                    'field' => [
+                        'label' => 'Фото отзыва',
+                        'tab' => null,
+                        'new_item_label' => 'Добавить фото',
+                        'init_rows' => 0,
+                        'min_rows' => 0,
+                        'max_rows' => (int) config('backpack.reviews.photo_review.max_files', 5),
+                        'fields' => [
+                            [
+                                'label' => 'Фото',
+                                'aspect_ratio' => 4 / 3,
+                            ],
+                            [
+                                'name' => 'alt',
+                                'label' => 'ALT (опционально)',
+                                'type' => 'text',
+                            ],
+                        ],
+                    ],
+                    'column' => [
+                        'label' => 'Фото отзыва',
                     ],
                 ],
             ]
@@ -266,6 +299,33 @@ class Review extends Model implements SchedulableInterface, HasCrudCardInterface
         ];
     }
 
+    public function photoGalleryForApi(): array
+    {
+        return $this->getImagesCollection('photo_gallery')
+            ->map(function (array $image): ?array {
+                $path = $image['src'] ?? $image['path'] ?? null;
+                $url = $image['url'] ?? null;
+
+                if ($path) {
+                    $url = $this->formatImageUrlForAttribute('photo_gallery', $path);
+                }
+
+                if (!$url) {
+                    return null;
+                }
+
+                return array_filter([
+                    'url' => $url,
+                    'path' => $path,
+                    'alt' => $image['alt'] ?? null,
+                    'title' => $image['title'] ?? null,
+                ], fn ($value) => $value !== null && $value !== '');
+            })
+            ->filter()
+            ->values()
+            ->all();
+    }
+
     protected function translateVideoTitle(string $locale): ?string
     {
         if (!$this->hasVideoTitle()) {
@@ -292,6 +352,78 @@ class Review extends Model implements SchedulableInterface, HasCrudCardInterface
 
         foreach ($translations as $value) {
             if (is_string($value) && trim($value) !== '') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public function resolveReviewType(?string $candidate = null): string
+    {
+        $explicit = $this->normalizeReviewType(
+            $candidate
+            ?? ($this->attributes['review_type'] ?? null)
+            ?? $this->getRawOriginal('review_type')
+        );
+        if ($explicit) {
+            return $explicit;
+        }
+
+        $hasVideoContent = !empty($this->video_url)
+            || $this->hasVideoTitle()
+            || !empty($this->video_poster)
+            || (bool) $this->is_video;
+
+        if ($hasVideoContent) {
+            return 'video';
+        }
+
+        if ($this->hasPhotoGalleryContent()) {
+            return 'photo';
+        }
+
+        return 'text';
+    }
+
+    public function setReviewTypeAttribute($value): void
+    {
+        $this->attributes['review_type'] = $this->normalizeReviewType($value) ?? null;
+    }
+
+    public function getReviewTypeAttribute($value): string
+    {
+        return $this->resolveReviewType($value);
+    }
+
+    protected function normalizeReviewType($value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $normalized = strtolower(trim((string) $value));
+        if (in_array($normalized, ['text', 'video', 'photo'], true)) {
+            return $normalized;
+        }
+
+        return null;
+    }
+
+    protected function hasPhotoGalleryContent(): bool
+    {
+        $raw = $this->photo_gallery;
+        if (is_string($raw)) {
+            $decoded = json_decode($raw, true);
+            $raw = json_last_error() === JSON_ERROR_NONE ? $decoded : [];
+        }
+
+        if (!is_array($raw)) {
+            return false;
+        }
+
+        foreach ($raw as $item) {
+            if (is_array($item) && !empty($item['src'] ?? $item['path'] ?? null)) {
                 return true;
             }
         }
@@ -574,7 +706,9 @@ class Review extends Model implements SchedulableInterface, HasCrudCardInterface
             : ($text ?: 'Без текста');
         
         $rating = $this->rating ?? 0;
-        $isVideo = $this->is_video ?? false;
+        $reviewType = $this->resolveReviewType();
+        $isVideo = $reviewType === 'video';
+        $isPhoto = $reviewType === 'photo';
         $isModerated = $this->is_moderated ?? false;
         $editUrl = $this->getCrudEditUrl();
         
@@ -595,9 +729,9 @@ class Review extends Model implements SchedulableInterface, HasCrudCardInterface
             : '<span class="badge badge-warning" style="font-size: 9px;">Модерация</span>';
         
         // Icon
-        $iconBg = $isVideo ? '#e8f4fd' : '#f5f5f5';
-        $iconClass = $isVideo ? 'la-video' : 'la-comment';
-        $iconColor = $isVideo ? '#2196F3' : '#999';
+        $iconBg = $isVideo ? '#e8f4fd' : ($isPhoto ? '#fff4ea' : '#f5f5f5');
+        $iconClass = $isVideo ? 'la-video' : ($isPhoto ? 'la-image' : 'la-comment');
+        $iconColor = $isVideo ? '#2196F3' : ($isPhoto ? '#fd7e14' : '#999');
         
         $html = '<div class="review-crud-card" style="display: flex; gap: 8px; padding: 6px; border: 1px solid #e0e0e0; border-radius: 4px; background: #fafafa; ' . ($compact ? 'max-width: 280px;' : '') . '">';
         $html .= '<div style="flex-shrink: 0; width: 32px; height: 32px; background: ' . $iconBg . '; border-radius: 4px; display: flex; align-items: center; justify-content: center;">';
@@ -801,6 +935,109 @@ class Review extends Model implements SchedulableInterface, HasCrudCardInterface
         $normalized = strtoupper(substr($cleaned, 0, 2));
 
         return strlen($normalized) === 2 ? $normalized : null;
+    }
+
+    protected function processImagesBeforeSaving(string $attribute, array $images): array
+    {
+        if ($attribute !== 'photo_gallery') {
+            return $this->processImagesBeforeSavingBase($attribute, $images);
+        }
+
+        $maxFiles = (int) config('backpack.reviews.photo_review.max_files', 5);
+
+        if (count($images) > $maxFiles) {
+            throw ValidationException::withMessages([
+                'photo_gallery' => [sprintf('Максимально допустимое количество фото: %d.', $maxFiles)],
+            ]);
+        }
+
+        $options = static::imageUploadOptions('photo_gallery');
+        $prefix = static::imageFieldPrefix('photo_gallery');
+
+        return collect($images)
+            ->map(function (array $image) use ($options, $prefix) {
+                if (!array_key_exists('src', $image)) {
+                    return $image;
+                }
+
+                $src = trim((string) $image['src']);
+                if ($src === '') {
+                    return null;
+                }
+
+                if ($this->isBase64ImageBase($src)) {
+                    $image['src'] = $this->optimizeReviewPhotoBase64($src);
+                }
+
+                return $this->processSingleImageBase($image, clone $options, $prefix);
+            })
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    protected function optimizeReviewPhotoBase64(string $dataUri): string
+    {
+        if (!preg_match('#^data:(?P<mime>[^;]+);base64,(?P<data>.+)$#si', $dataUri, $matches)) {
+            throw ValidationException::withMessages([
+                'photo_gallery' => ['Некорректный формат изображения.'],
+            ]);
+        }
+
+        $encoded = preg_replace('/\s+/', '', (string) ($matches['data'] ?? ''));
+        $binary = base64_decode($encoded, true);
+
+        if ($binary === false) {
+            throw ValidationException::withMessages([
+                'photo_gallery' => ['Не удалось декодировать изображение.'],
+            ]);
+        }
+
+        $maxInputSize = (int) config('backpack.reviews.photo_review.max_input_file_size_kb', 12288) * 1024;
+        if ($maxInputSize > 0 && strlen($binary) > $maxInputSize) {
+            throw ValidationException::withMessages([
+                'photo_gallery' => ['Исходное изображение слишком большое.'],
+            ]);
+        }
+
+        $maxWidth = (int) config('backpack.reviews.photo_review.max_resolution.width', 1920);
+        $maxHeight = (int) config('backpack.reviews.photo_review.max_resolution.height', 1920);
+        $quality = (int) config('backpack.reviews.photo_review.jpeg_quality', 84);
+        $minQuality = (int) config('backpack.reviews.photo_review.min_jpeg_quality', 60);
+        $maxFileSize = (int) config('backpack.reviews.photo_review.max_file_size_kb', 4096) * 1024;
+
+        try {
+            $image = ImageManager::gd()->read($binary);
+        } catch (Throwable $exception) {
+            Log::warning('Failed to process review photo image.', [
+                'mime' => $matches['mime'] ?? null,
+                'decoded_size' => strlen($binary),
+                'error' => $exception->getMessage(),
+            ]);
+
+            throw ValidationException::withMessages([
+                'photo_gallery' => ['Не удалось обработать изображение.'],
+            ]);
+        }
+
+        if ($maxWidth > 0 && $maxHeight > 0) {
+            $image = $image->scaleDown($maxWidth, $maxHeight);
+        }
+
+        $encodedImage = $image->toJpg(quality: $quality);
+
+        while ($maxFileSize > 0 && strlen((string) $encodedImage) > $maxFileSize && $quality > $minQuality) {
+            $quality -= 5;
+            $encodedImage = $image->toJpg(quality: $quality);
+        }
+
+        if ($maxFileSize > 0 && strlen((string) $encodedImage) > $maxFileSize) {
+            throw ValidationException::withMessages([
+                'photo_gallery' => ['Файл превышает допустимый размер даже после оптимизации.'],
+            ]);
+        }
+
+        return 'data:image/jpeg;base64,'.base64_encode((string) $encodedImage);
     }
 
     protected function storeImageUsingUploader($value, string $folder, ?array $previous = null, bool $uploadRemote = true): ?array

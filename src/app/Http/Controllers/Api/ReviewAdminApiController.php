@@ -321,11 +321,13 @@ class ReviewAdminApiController extends Controller
 
     protected function validateReviewPayload(Request $request, bool $requireReviewable): array
     {
+        $reviewType = $this->resolveRequestedReviewType($request);
+
         $rules = [
             'text'            => [
                 'nullable',
                 'string',
-                Rule::requiredIf(fn () => !$request->boolean('is_video')),
+                Rule::requiredIf(fn () => $reviewType === 'text'),
             ],
             'rating'          => ['nullable', 'integer', 'min:1', 'max:5'],
             'extras'          => ['nullable', 'array'],
@@ -340,10 +342,13 @@ class ReviewAdminApiController extends Controller
             'flaws'           => ['nullable', 'string'],
             'likes'           => ['nullable', 'integer', 'min:0'],
             'dislikes'        => ['nullable', 'integer', 'min:0'],
+            'review_type'     => ['nullable', Rule::in(['text', 'video', 'photo'])],
             'is_video'        => ['nullable', 'boolean'],
-            'video_url'       => ['nullable', 'url', 'max:2048'],
+            'video_url'       => ['nullable', 'url', 'max:2048', Rule::requiredIf(fn () => $reviewType === 'video')],
             'video_title'     => ['nullable'],
             'video_poster'    => ['nullable'],
+            'photo_gallery'   => ['nullable', 'array', 'max:' . (int) config('backpack.reviews.photo_review.max_files', 5), Rule::requiredIf(fn () => $reviewType === 'photo')],
+            'photo_gallery.*.src' => ['required_with:photo_gallery', 'string'],
             'lang'            => ['nullable', 'string', 'min:2', 'max:5'],
             'country'         => ['nullable', 'string', 'size:2'],
         ];
@@ -354,6 +359,24 @@ class ReviewAdminApiController extends Controller
         }
 
         return $request->validate($rules);
+    }
+
+    protected function resolveRequestedReviewType(Request $request): string
+    {
+        $type = strtolower((string) $request->input('review_type', ''));
+        if (in_array($type, ['text', 'video', 'photo'], true)) {
+            return $type;
+        }
+
+        if ($request->boolean('is_video')) {
+            return 'video';
+        }
+
+        if ($request->filled('photo_gallery')) {
+            return 'photo';
+        }
+
+        return 'text';
     }
 
     protected function createReviewRecord(array $data): Review
@@ -390,6 +413,10 @@ class ReviewAdminApiController extends Controller
             $review->is_video = (bool) $data['is_video'];
         }
 
+        if (array_key_exists('review_type', $data)) {
+            $review->review_type = $data['review_type'];
+        }
+
         if (array_key_exists('video_url', $data)) {
             $review->video_url = $data['video_url'];
         }
@@ -400,6 +427,24 @@ class ReviewAdminApiController extends Controller
 
         if (array_key_exists('video_poster', $data)) {
             $review->video_poster = $data['video_poster'];
+        }
+
+        if (array_key_exists('photo_gallery', $data)) {
+            $review->photo_gallery = $data['photo_gallery'];
+        }
+
+        $effectiveType = $review->resolveReviewType($data['review_type'] ?? null);
+        $review->review_type = $effectiveType;
+        $review->is_video = $effectiveType === 'video';
+
+        if ($effectiveType !== 'video') {
+            $review->video_url = null;
+            $review->video_title = [];
+            $review->video_poster = [];
+        }
+
+        if ($effectiveType !== 'photo') {
+            $review->photo_gallery = [];
         }
 
         if (array_key_exists('lang', $data)) {
@@ -581,6 +626,8 @@ class ReviewAdminApiController extends Controller
             'owner' => $this->reviewOwnerPayload($review, $extras),
             'video' => $review->videoData(true),
             'is_video' => (bool) $review->is_video,
+            'review_type' => $review->resolveReviewType(),
+            'photos' => $review->photoGalleryForApi(),
             'lang' => $review->lang,
             'country' => $review->country,
             'created_at' => optional($review->created_at)->toDateTimeString(),

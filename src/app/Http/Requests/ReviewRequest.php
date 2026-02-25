@@ -30,11 +30,14 @@ class ReviewRequest extends FormRequest
         $this->redirect = url()->previous().'#review_' . $type;
       
         return [
-          'text' => 'nullable|string|min:2|max:1000|required_unless:is_video,1,true,on',
+          'text' => 'nullable|string|min:2|max:1000|required_without_all:video_url,photo_gallery',
+          'review_type' => 'nullable|string|in:text,video,photo',
           'is_video' => 'nullable|boolean',
-          'video_url' => 'nullable|url|max:2048|required_if:is_video,1,true,on',
+          'video_url' => 'nullable|url|max:2048|required_if:is_video,1,true,on|required_if:review_type,video',
           'video_title' => 'nullable',
           'video_poster' => 'nullable',
+          'photo_gallery' => 'nullable|array|max:5|required_if:review_type,photo',
+          'photo_gallery.*.src' => 'required_with:photo_gallery|string',
           'lang' => 'nullable|string|min:2|max:5',
           'country' => 'nullable|string|size:2',
         ];

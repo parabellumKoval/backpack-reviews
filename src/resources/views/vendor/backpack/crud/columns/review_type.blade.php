@@ -4,13 +4,35 @@ Shows text or video icon based on is_video field
 --}}
 
 @php
-    $value = data_get($entry, $column['name']);
-    $isVideo = data_get($entry, 'is_video', false);
-    
-    // Icon configuration
-    $icon = $isVideo ? 'la-video' : 'la-comment-dots';
-    $text = $isVideo ? 'Видео' : 'Текст';
-    $color = $isVideo ? '#dc3545' : '#17a2b8'; // red for video, blue for text
+    $type = data_get($entry, 'review_type');
+    $isVideo = (bool) data_get($entry, 'is_video', false);
+
+    if (!$type) {
+        $type = $isVideo ? 'video' : 'text';
+    }
+
+    $typeMap = [
+        'text' => [
+            'icon' => 'la-comment-dots',
+            'text' => 'Текст',
+            'color' => '#17a2b8',
+        ],
+        'video' => [
+            'icon' => 'la-video',
+            'text' => 'Видео',
+            'color' => '#dc3545',
+        ],
+        'photo' => [
+            'icon' => 'la-image',
+            'text' => 'Фото',
+            'color' => '#fd7e14',
+        ],
+    ];
+
+    $meta = $typeMap[$type] ?? $typeMap['text'];
+    $icon = $meta['icon'];
+    $text = $meta['text'];
+    $color = $meta['color'];
     
     $iconSize = $column['icon_size'] ?? '20px';
     $showText = $column['show_text'] ?? true;

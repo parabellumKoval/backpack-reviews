@@ -23,6 +23,8 @@ class ReviewLargeResource extends JsonResource
         'owner' => $this->ownerModelOrInfo,
         'video' => $this->videoData(true),
         'is_video' => (bool) $this->is_video,
+        'review_type' => $this->resolveReviewType(),
+        'photos' => $this->photoGalleryForApi(),
         'extras' => $this->extras,
         'children' => self::collection($this->children),
         'reviewable' => $this->shortReviewable,

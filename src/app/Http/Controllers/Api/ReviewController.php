@@ -537,11 +537,29 @@ class ReviewController extends \App\Http\Controllers\Controller
       ], $e->getCode());
     }
 
+    $photoRules = [
+      'review_type' => ['nullable', Rule::in(['text', 'video', 'photo'])],
+      'photo_gallery' => ['nullable', 'array', 'max:' . (int) config('backpack.reviews.photo_review.max_files', 5)],
+      'photo_gallery.*.src' => ['required_with:photo_gallery', 'string'],
+      'photo_gallery.*.alt' => ['nullable', 'string', 'max:255'],
+      'photo_gallery.*.title' => ['nullable', 'string', 'max:255'],
+      'photo_gallery.*.size' => ['nullable', Rule::in(['cover', 'contain'])],
+    ];
+
+    $photoValidator = Validator::make($request->all(), $photoRules);
+    if ($photoValidator->fails()) {
+      return response()->json([
+        'message' => 'Data Validation Error',
+        'options' => $photoValidator->errors()->toArray(),
+      ], 422);
+    }
+
     // Create new model
     $review = new $this->review_model();
 
     // Fill model with data using RdTrait
     $review = $this->setRequestFields($review, $data);
+    $review = $this->applyReviewContentType($review, $data);
 
     //
     $review = $this->moderationPolicy($review);
@@ -563,8 +581,13 @@ class ReviewController extends \App\Http\Controllers\Controller
       // Save order
       $review->save();
       ReviewCreated::dispatch($review);
-    }catch(\Expression $e) {
-      return response()->json($e->getMessage(), $e->getCode());
+    }catch(\Throwable $e) {
+      $status = $e->getCode();
+      if (!is_int($status) || $status < 400 || $status > 599) {
+        $status = 422;
+      }
+
+      return response()->json($e->getMessage(), $status);
     }
 
     return response()->json($review);
@@ -584,6 +607,42 @@ class ReviewController extends \App\Http\Controllers\Controller
     }
 
     return $model;
+  }
+
+  protected function applyReviewContentType($review, array $data)
+  {
+    $requestedType = isset($data['review_type'])
+      ? strtolower((string) $data['review_type'])
+      : null;
+
+    if (!in_array($requestedType, ['text', 'video', 'photo'], true)) {
+      $requestedType = !empty($data['is_video']) ? 'video' : null;
+    }
+
+    if ($requestedType === null) {
+      if (!empty($data['photo_gallery']) && is_array($data['photo_gallery'])) {
+        $requestedType = 'photo';
+      } elseif (!empty($data['video_url'])) {
+        $requestedType = 'video';
+      } else {
+        $requestedType = 'text';
+      }
+    }
+
+    $review->review_type = $requestedType;
+    $review->is_video = $requestedType === 'video';
+
+    if ($requestedType !== 'video') {
+      $review->video_url = null;
+      $review->video_title = [];
+      $review->video_poster = [];
+    }
+
+    if ($requestedType !== 'photo') {
+      $review->photo_gallery = [];
+    }
+
+    return $review;
   }
   
   /**

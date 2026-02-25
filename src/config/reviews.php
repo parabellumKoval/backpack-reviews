@@ -32,6 +32,18 @@ return [
 
   'rating_length' => 5,
 
+  'photo_review' => [
+    'max_files' => 5,
+    'max_file_size_kb' => 4096,
+    'max_input_file_size_kb' => 12288,
+    'max_resolution' => [
+      'width' => 1920,
+      'height' => 1920,
+    ],
+    'jpeg_quality' => 84,
+    'min_jpeg_quality' => 60,
+  ],
+
   // Override
   'review_model' => 'Backpack\Reviews\app\Models\Review',
   'review_controller_api' => 'Backpack\Reviews\app\Http\Controllers\Api\ReviewController',
@@ -98,7 +110,7 @@ return [
   // Validation fields
   'fields' => [
     'text' => [
-      'rules' => 'nullable|string|min:2|max:1000|required_unless:is_video,1,true,on'
+      'rules' => 'nullable|string|min:2|max:1000|required_without_all:video_url,photo_gallery'
     ],
     'parent_id' => [
       'rules' => 'nullable|integer'
@@ -112,17 +124,23 @@ return [
     'rating' => [
       'rules' => 'nullable|integer'
     ],
+    'review_type' => [
+      'rules' => 'nullable|string|in:text,video,photo'
+    ],
     'is_video' => [
       'rules' => 'nullable|boolean'
     ],
     'video_url' => [
-      'rules' => 'nullable|url|max:2048|required_if:is_video,1,true,on'
+      'rules' => 'nullable|url|max:2048|required_if:is_video,1,true,on|required_if:review_type,video'
     ],
     'video_title' => [
       'rules' => 'nullable'
     ],
     'video_poster' => [
       'rules' => 'nullable'
+    ],
+    'photo_gallery' => [
+      'rules' => 'nullable|array|max:5|required_if:review_type,photo'
     ],
     'owner' => [
       // 'rules' => 'array:city,address,zip,method,warehouse',

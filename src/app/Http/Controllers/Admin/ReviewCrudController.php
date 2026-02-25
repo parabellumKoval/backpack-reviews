@@ -124,20 +124,38 @@ class ReviewCrudController extends CrudController
       $this->crud->addButtonFromModelFunction('top', 'reviews_settings', 'getSettingsButtonHtml', 'end');
 
       $this->crud->addFilter([
-        'name'  => 'is_video',
+        'name'  => 'review_type',
         'type'  => 'dropdown',
-        'label' => 'Видео отзыв',
+        'label' => 'Тип отзыва',
       ], [
-        '1' => 'Только видео',
-        '0' => 'Без видео',
+        'text' => 'Только текстовые',
+        'video' => 'Только видео',
+        'photo' => 'Только фото',
       ], function ($value) {
-        if ($value === '1') {
-          $this->crud->addClause('where', 'is_video', true);
-        } else {
+        if ($value === 'video') {
           $this->crud->addClause('where', function ($query) {
-            $query->where('is_video', false)->orWhereNull('is_video');
+            $query->where('review_type', 'video')
+              ->orWhere(function ($legacy) {
+                $legacy->whereNull('review_type')->where('is_video', true);
+              });
           });
+          return;
         }
+
+        if ($value === 'photo') {
+          $this->crud->addClause('where', 'review_type', 'photo');
+          return;
+        }
+
+        $this->crud->addClause('where', function ($query) {
+          $query->where('review_type', 'text')
+            ->orWhere(function ($legacy) {
+              $legacy->whereNull('review_type')
+                ->where(function ($inner) {
+                  $inner->where('is_video', false)->orWhereNull('is_video');
+                });
+            });
+        });
       });
 
       // TODO: remove setFromDb() and manually define Columns, maybe Filters
@@ -188,7 +206,7 @@ class ReviewCrudController extends CrudController
       ]);
 
       $this->crud->addColumn([
-        'name' => 'is_video',
+        'name' => 'review_type',
         'label' => 'Тип',
         'type' => 'view',
         'view' => 'reviews::columns.review_type',
@@ -554,18 +572,34 @@ class ReviewCrudController extends CrudController
         ]
       );
 
+      $photoGalleryField = array_replace_recursive(
+        AdminReview::imageFieldDefinition('photo_gallery'),
+        [
+          'name' => 'photo_gallery',
+          'hint' => 'До '.(int) config('backpack.reviews.photo_review.max_files', 5).' фотографий',
+        ]
+      );
+
+      $currentReviewType = $this->entry?->resolveReviewType() ?? ($this->entry?->is_video ? 'video' : 'text');
+
       $this->crud->addField([
         'name' => 'content_blocks',
         'type' => 'conditional_fields',
         'driver' => [
-          'name' => 'is_video',
-          'label' => 'Видео отзыв',
-          'type' => 'boolean',
-          'default' => $this->entry? (int) $this->entry->is_video : 0,
-          'hint' => 'Переключатель определяет, какие поля нужно заполнить.',
+          'name' => 'review_type',
+          'label' => 'Тип отзыва',
+          'type' => 'select_from_array',
+          'options' => [
+            'text' => 'Текстовый',
+            'video' => 'Видео',
+            'photo' => 'Фото',
+          ],
+          'default' => $currentReviewType,
+          'allows_null' => false,
+          'hint' => 'Выберите формат отзыва.',
         ],
         'branches' => [
-          '0' => [
+          'text' => [
             'fields' => [
               [
                 'name' => 'text',
@@ -579,7 +613,7 @@ class ReviewCrudController extends CrudController
               ],
             ],
           ],
-          '1' => [
+          'video' => [
             'fields' => [
               [
                 'name' => 'video_url',
@@ -603,6 +637,19 @@ class ReviewCrudController extends CrudController
               [
                 'name' => 'text',
                 'label' => 'Комментарий (необязательно)',
+                'type' => 'textarea',
+                'attributes' => [
+                  'rows' => '6',
+                ],
+              ],
+            ],
+          ],
+          'photo' => [
+            'fields' => [
+              $photoGalleryField,
+              [
+                'name' => 'text',
+                'label' => 'Комментарий к фото (необязательно)',
                 'type' => 'textarea',
                 'attributes' => [
                   'rows' => '6',

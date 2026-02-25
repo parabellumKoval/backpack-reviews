@@ -7,10 +7,17 @@ Displays review text and reactions (likes/dislikes) below it
     $text = data_get($entry, 'text', '');
     $maxLength = $column['text_limit'] ?? 150;
     $truncated = strlen($text) > $maxLength ? substr($text, 0, $maxLength) . '...' : $text;
-    $isVideo = (bool) data_get($entry, 'is_video', false);
+    $reviewType = method_exists($entry, 'resolveReviewType')
+        ? $entry->resolveReviewType()
+        : ((bool) data_get($entry, 'is_video', false) ? 'video' : 'text');
+    $isVideo = $reviewType === 'video';
+    $isPhoto = $reviewType === 'photo';
     $posterData = $isVideo && method_exists($entry, 'videoPosterForApi') ? $entry->videoPosterForApi() : null;
     $posterUrl = $posterData['url'] ?? null;
     $videoUrl = $isVideo ? data_get($entry, 'video_url') : null;
+    $photoGallery = $isPhoto && method_exists($entry, 'photoGalleryForApi')
+        ? array_slice($entry->photoGalleryForApi(), 0, 3)
+        : [];
     
     // Reactions configuration from column settings
     $reactionsColumn = [
@@ -45,6 +52,14 @@ Displays review text and reactions (likes/dislikes) below it
             @else
                 <div class="text-muted small">Предпросмотр видео недоступен</div>
             @endif
+        </div>
+    @elseif($isPhoto)
+        <div class="review-photo-preview" style="display: flex; gap: 6px; flex-wrap: wrap; max-width: 260px;">
+            @forelse($photoGallery as $photo)
+                <img src="{{ $photo['url'] ?? '' }}" alt="{{ $photo['alt'] ?? 'Фото отзыва' }}" loading="lazy" style="width: 78px; height: 78px; object-fit: cover; border-radius: 4px;">
+            @empty
+                <div class="text-muted small">Фото не прикреплены</div>
+            @endforelse
         </div>
     @else
         <div class="review-text" style="color: #333; font-size: 13px; line-height: 1.4;">

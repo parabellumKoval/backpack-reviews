@@ -22,7 +22,11 @@ Shows review text, rating, author info, and link to edit
     // Get review data
     $text = $review->text ?? '';
     $rating = $review->rating ?? 0;
-    $isVideo = $review->is_video ?? false;
+    $reviewType = method_exists($review, 'resolveReviewType')
+        ? $review->resolveReviewType()
+        : (($review->is_video ?? false) ? 'video' : 'text');
+    $isVideo = $reviewType === 'video';
+    $isPhoto = $reviewType === 'photo';
     $isModerated = $review->is_moderated ?? false;
     $createdAt = $review->created_at?->format('d.m.Y H:i') ?? '';
     
@@ -65,6 +69,10 @@ Shows review text, rating, author info, and link to edit
             <div style="width: 40px; height: 40px; background: #e8f4fd; border-radius: 6px; display: flex; align-items: center; justify-content: center;">
                 <i class="la la-video" style="font-size: 20px; color: #2196F3;"></i>
             </div>
+        @elseif($isPhoto)
+            <div style="width: 40px; height: 40px; background: #fff4ea; border-radius: 6px; display: flex; align-items: center; justify-content: center;">
+                <i class="la la-image" style="font-size: 20px; color: #fd7e14;"></i>
+            </div>
         @else
             <div style="width: 40px; height: 40px; background: #f5f5f5; border-radius: 6px; display: flex; align-items: center; justify-content: center;">
                 <i class="la la-comment" style="font-size: 20px; color: #999;"></i>
@@ -84,6 +92,8 @@ Shows review text, rating, author info, and link to edit
                title="{{ $text }}">
                 @if($isVideo && $showVideo)
                     <i class="la la-play-circle" style="color: #2196F3;"></i>
+                @elseif($isPhoto)
+                    <i class="la la-image" style="color: #fd7e14;"></i>
                 @endif
                 {{ $displayText ?: 'Без текста' }}
             </a>
