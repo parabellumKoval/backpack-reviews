@@ -1,4 +1,5 @@
 <?php
+use App\Http\Controllers\Admin\GenerationRunController;
 use Backpack\Reviews\app\Http\Controllers\Admin\GoogleReviewOAuthController;
 use Backpack\Reviews\app\Http\Controllers\Api\ReviewAdminApiController;
 
@@ -9,6 +10,8 @@ Route::group([
 ], function () { 
     Route::crud('review', 'ReviewCrudController');
     Route::crud('google-review', 'GoogleReviewCrudController');
+    Route::post('google-review/sync', 'GoogleReviewCrudController@syncNow')
+        ->name('bp.reviews.google.sync');
     Route::post('review/{id}/toggle', [
         'as' => 'reviews.toggle',
         'uses' => 'ReviewCrudController@toggleColumnRouter',
@@ -19,6 +22,15 @@ Route::group([
         ->name('bp.reviews.google.oauth');
     Route::get('reviews/google/callback', [GoogleReviewOAuthController::class, 'callback'])
         ->name('bp.reviews.google.callback');
+
+    Route::group([
+        'prefix' => 'review/generation-runs',
+        'defaults' => ['generation_type' => \App\Models\GenerationRun::TYPE_PRODUCT_REVIEWS],
+    ], function () {
+        Route::get('/', [GenerationRunController::class, 'index'])->name('bp.reviews.generations.index');
+        Route::post('/', [GenerationRunController::class, 'storeReviews'])->name('bp.reviews.generations.store');
+        Route::get('{run}', [GenerationRunController::class, 'show'])->name('bp.reviews.generations.show');
+    });
 });
 
 

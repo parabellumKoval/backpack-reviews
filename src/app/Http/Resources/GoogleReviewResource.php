@@ -14,11 +14,14 @@ class GoogleReviewResource extends JsonResource
             'id' => $this->id,
             'review_id' => $this->review_id,
             'review_name' => $this->review_name,
+            'is_active' => (bool) $this->is_active,
+            'sort_order' => (int) ($this->sort_order ?? 0),
             'rating' => $this->rating,
             'comment' => $this->comment,
             'reviewer' => [
                 'name' => $this->reviewer_name,
                 'photo_url' => $this->reviewer_photo_url,
+                'photo_path' => $this->reviewer_photo_path,
                 'is_anonymous' => (bool) $this->reviewer_is_anonymous,
             ],
             'reply' => $this->reply_comment ? [

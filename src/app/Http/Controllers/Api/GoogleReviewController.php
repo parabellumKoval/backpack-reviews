@@ -12,6 +12,10 @@ class GoogleReviewController extends \App\Http\Controllers\Controller
     {
         $query = GoogleReview::query()->with('location');
 
+        if (!$request->boolean('include_inactive')) {
+            $query->active();
+        }
+
         if ($request->filled('location_id')) {
             $query->where('location_id', $request->input('location_id'));
         }
@@ -27,6 +31,15 @@ class GoogleReviewController extends \App\Http\Controllers\Controller
             });
         }
 
+        if ($request->filled('rating')) {
+            $query->where('rating', (int) $request->input('rating'));
+        }
+
+        if ($request->boolean('has_comment')) {
+            $query->whereNotNull('comment')
+                ->whereRaw("TRIM(comment) <> ''");
+        }
+
         $total = (clone $query)->count();
         $avgRating = (clone $query)->avg('rating');
 
@@ -35,7 +48,10 @@ class GoogleReviewController extends \App\Http\Controllers\Controller
             config('backpack.reviews.google.per_page', config('backpack.reviews.per_page', 12))
         );
 
-        $paginator = $query->orderByDesc('review_created_at')->paginate($perPage);
+        $paginator = $query
+            ->orderByDesc('sort_order')
+            ->orderByDesc('review_created_at')
+            ->paginate($perPage);
 
         return GoogleReviewResource::collection($paginator)->additional([
             'meta' => [

@@ -12,7 +12,8 @@ use Illuminate\Support\Str;
 class GoogleReviewsSyncService
 {
     public function __construct(
-        protected GoogleBusinessProfileClient $client
+        protected GoogleBusinessProfileClient $client,
+        protected GoogleReviewAvatarStorage $avatarStorage
     ) {
     }
 
@@ -158,7 +159,6 @@ class GoogleReviewsSyncService
             'location_name' => $location->location_name,
             'review_id' => $reviewId ?: Str::afterLast($reviewName, '/'),
             'reviewer_name' => Arr::get($reviewer, 'displayName'),
-            'reviewer_photo_url' => Arr::get($reviewer, 'profilePhotoUrl'),
             'reviewer_is_anonymous' => (bool) Arr::get($reviewer, 'isAnonymous', false),
             'rating' => $rating,
             'comment' => Arr::get($reviewPayload, 'comment'),
@@ -170,9 +170,22 @@ class GoogleReviewsSyncService
             'synced_at' => now(),
         ];
 
+        $avatarPayload = $this->avatarStorage->storeFromSource(
+            Arr::get($reviewer, 'profilePhotoUrl'),
+            (string) ($reviewId ?: $reviewName)
+        );
+        if ($avatarPayload) {
+            $attributes['reviewer_photo_url'] = $avatarPayload['url'];
+            $attributes['reviewer_photo_path'] = $avatarPayload['path'];
+        }
+
         $review = GoogleReview::query()->where('review_name', $reviewName)->first();
         if (!$review) {
-            GoogleReview::create(['review_name' => $reviewName] + $attributes);
+            GoogleReview::create([
+                'review_name' => $reviewName,
+                'is_active' => true,
+                'sort_order' => 0,
+            ] + $attributes);
             return 'created';
         }
 

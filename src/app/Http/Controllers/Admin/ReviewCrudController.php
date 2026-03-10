@@ -122,6 +122,7 @@ class ReviewCrudController extends CrudController
     {
 
       $this->crud->addButtonFromModelFunction('top', 'reviews_settings', 'getSettingsButtonHtml', 'end');
+      $this->crud->addButtonFromView('top', 'generate_reviews', 'review_generate_reviews', 'end');
 
       $this->crud->addFilter([
         'name'  => 'review_type',
