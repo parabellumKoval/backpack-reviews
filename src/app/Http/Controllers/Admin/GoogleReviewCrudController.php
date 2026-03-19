@@ -4,6 +4,7 @@ namespace Backpack\Reviews\app\Http\Controllers\Admin;
 
 use Backpack\CRUD\app\Http\Controllers\CrudController;
 use Backpack\CRUD\app\Library\CrudPanel\CrudPanelFacade as CRUD;
+use Backpack\Helpers\Traits\Admin\HasToggleColumns;
 use Backpack\Reviews\app\Http\Requests\GoogleReviewRequest;
 use Backpack\Reviews\app\Models\Admin\GoogleReview;
 use Backpack\Reviews\app\Models\GoogleReviewLocation;
@@ -22,6 +23,8 @@ class GoogleReviewCrudController extends CrudController
     use \Backpack\CRUD\app\Http\Controllers\Operations\CreateOperation { store as traitStore; }
     use \Backpack\CRUD\app\Http\Controllers\Operations\UpdateOperation { update as traitUpdate; }
     use \Backpack\CRUD\app\Http\Controllers\Operations\DeleteOperation;
+    use \Backpack\CRUD\app\Http\Controllers\Operations\BulkDeleteOperation;
+    use HasToggleColumns;
 
     public function setup()
     {
@@ -49,10 +52,16 @@ class GoogleReviewCrudController extends CrudController
         $this->crud->orderBy('sort_order', 'desc');
         $this->crud->orderBy('review_created_at', 'desc');
 
-        $this->crud->addColumn([
+        $this->addToggleColumn([
             'name' => 'is_active',
             'label' => 'Активен',
-            'type' => 'boolean',
+            'orderable' => true,
+            'toggle' => [
+                'values' => [
+                    'checked' => 1,
+                    'unchecked' => 0,
+                ],
+            ],
         ]);
 
         $this->crud->addColumn([

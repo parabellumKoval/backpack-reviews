@@ -6,11 +6,17 @@ use App\Models\Product;
 use App\Support\GenerationRunReporter;
 use Backpack\Profile\app\Models\Profile;
 use Backpack\Reviews\app\Models\Review;
+use Backpack\Reviews\app\Services\GeneratedProductPhotoReviewService;
+use Backpack\Reviews\app\Services\GeneratedReviewScheduleService;
+use Backpack\Reviews\app\Services\ReviewProductTargetResolver;
 use Backpack\Store\app\Models\Brand;
 use Backpack\Store\app\Models\Category;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\LazyCollection;
 use Illuminate\Support\Str;
 use ParabellumKoval\AiContentGenerator\Services\ContentGenerator;
 use App\Support\ReviewRewardContext;
@@ -35,12 +41,14 @@ class GenerateProductReviews extends Command
         {--schedule-max-per-day=1 : Maximum number of reviews to publish per day}
         {--schedule-hour-from=9 : Earliest publication hour}
         {--schedule-hour-to=21 : Latest publication hour}
+        {--photo-review-chance=0/10 : Chance of turning a generated review into a photo review}
         {--run-id= : Internal generation run ID for progress tracking}
         {--driver= : AI driver name}
         {--model= : AI model name}
         {--temperature=0.9 : Model temperature (higher = more variety)}
         {--max-tokens= : Max tokens for the response}
         {--force : Force provider even if marked unavailable}
+        {--prevent-duplicate-reviewers=1 : Prevent reusing the same reviewer for the same product if any review already exists in DB}
         {--prompt-path= : Path to prompt template file}
         {--skip-existing : Skip products that already have bot reviews}
         {--dry-run : Do not write to the database}';
@@ -64,13 +72,24 @@ class GenerateProductReviews extends Command
     protected string $promptTemplate;
     protected bool $dryRun = false;
     protected bool $publishNow = false;
+    protected bool $preventDuplicateReviewers = true;
     protected string $batchId;
+    protected int $photoReviewChanceNumerator = 0;
+    protected int $photoReviewChanceDenominator = 10;
+    protected ReviewProductTargetResolver $productTargetResolver;
 
-    public function handle(ContentGenerator $generator): int
+    public function handle(
+        ContentGenerator $generator,
+        GeneratedReviewScheduleService $reviewScheduleService,
+        GeneratedProductPhotoReviewService $generatedProductPhotoReviewService,
+        ReviewProductTargetResolver $productTargetResolver
+    ): int
     {
         $this->generator = $generator;
+        $this->productTargetResolver = $productTargetResolver;
         $this->dryRun = (bool) $this->option('dry-run');
         $this->publishNow = (bool) $this->option('publish-now');
+        $this->preventDuplicateReviewers = $this->resolvePreventDuplicateReviewers();
         $this->batchId = (string) Str::uuid();
 
         $productId = $this->option('product');
@@ -90,12 +109,13 @@ class GenerateProductReviews extends Command
         try {
             $countryFilters = $this->normalizeCountryFilters($this->option('country'));
             $localeFilters = $this->normalizeLocaleFilters($this->option('locale'));
+            [$this->photoReviewChanceNumerator, $this->photoReviewChanceDenominator] = $this->resolvePhotoReviewChance();
         } catch (\InvalidArgumentException $exception) {
             $this->error($exception->getMessage());
             return self::FAILURE;
         }
 
-        $products = $this->getProducts(
+        $productTotal = $this->countProducts(
             $productId,
             $this->option('products'),
             $categoryId,
@@ -104,11 +124,11 @@ class GenerateProductReviews extends Command
             $this->option('review-count-max'),
             $this->option('limit')
         );
-        if ($products->isEmpty()) {
+        if ($productTotal < 1) {
             $this->error('No products found for the given criteria.');
             return self::FAILURE;
         }
-        $reporter->setTotal($products->count(), [
+        $reporter->setTotal($productTotal, [
             'created_reviews' => 0,
             'skipped_products' => 0,
             'selection' => [
@@ -130,7 +150,7 @@ class GenerateProductReviews extends Command
 
         $this->info(sprintf(
             'Found %d products and %d bot pools (%d bot profiles).',
-            $products->count(),
+            $productTotal,
             $botPools->count(),
             $botPools->sum(fn (array $pool) => $pool['bots']->count())
         ));
@@ -141,6 +161,14 @@ class GenerateProductReviews extends Command
             $this->warn('Publish-now mode: generated reviews will be visible immediately.');
         } else {
             $this->info('Generated reviews will be scheduled for delayed publication.');
+        }
+
+        if ($this->photoReviewChanceNumerator > 0) {
+            $this->info(sprintf(
+                'Photo reviews enabled with chance %d/%d.',
+                $this->photoReviewChanceNumerator,
+                $this->photoReviewChanceDenominator
+            ));
         }
 
         $promptPath = (string) ($this->option('prompt-path') ?: self::DEFAULT_PROMPT_PATH);
@@ -155,11 +183,22 @@ class GenerateProductReviews extends Command
             return self::FAILURE;
         }
 
-        $progress = $this->output->createProgressBar($products->count());
+        $products = $this->getProductsLazy(
+            $productId,
+            $this->option('products'),
+            $categoryId,
+            $brandId,
+            $all,
+            $this->option('review-count-max'),
+            $this->option('limit')
+        );
+
+        $progress = $this->output->createProgressBar($productTotal);
         $progress->start();
 
         $createdReviews = collect();
         $totalGenerated = 0;
+        $photoReviews = 0;
         $skippedProducts = 0;
         $processedProducts = 0;
 
@@ -180,7 +219,7 @@ class GenerateProductReviews extends Command
                 }
 
                 $desiredCount = random_int($minReviews, $maxReviews);
-                $usedOwnerIds = $this->getExistingReviewerOwnerIds($product);
+                $usedOwnerIds = $this->resolveReservedReviewerOwnerIds($product);
                 $pool = $this->pickPoolForProduct($botPools, $usedOwnerIds, $desiredCount);
 
                 if ($pool === null) {
@@ -266,6 +305,10 @@ class GenerateProductReviews extends Command
 
                     $review = $this->createReview($product, $bot, $reviewData, 5);
                     if ($review) {
+                        if ($this->shouldAttachPhotoReview() && $generatedProductPhotoReviewService->attachFirstApprovedPhoto($review, $product)) {
+                            $photoReviews++;
+                        }
+
                         $createdForProduct->push($review);
                         $ownerIdsUsedInBatch[] = $ownerId;
                         $totalGenerated++;
@@ -286,7 +329,14 @@ class GenerateProductReviews extends Command
 
         $scheduledCount = 0;
         if (!$this->dryRun && !$this->publishNow && $createdReviews->isNotEmpty()) {
-            $scheduledCount = $this->scheduleGeneratedReviews($createdReviews);
+            $scheduledCount = $reviewScheduleService->schedule(
+                $createdReviews,
+                $this->resolveScheduleStart(),
+                $this->resolveScheduleMinPerDay(),
+                $this->resolveScheduleMaxPerDay(),
+                $this->resolveScheduleHourFrom(),
+                $this->resolveScheduleHourTo()
+            );
         }
 
         $progress->finish();
@@ -295,7 +345,7 @@ class GenerateProductReviews extends Command
         $this->info(sprintf(
             '✓ Generated %d reviews for %d products.',
             $totalGenerated,
-            $products->count() - $skippedProducts
+            $productTotal - $skippedProducts
         ));
 
         if ($skippedProducts > 0) {
@@ -305,12 +355,17 @@ class GenerateProductReviews extends Command
         if (!$this->dryRun && !$this->publishNow) {
             $this->info(sprintf('○ Scheduled %d reviews for delayed publication.', $scheduledCount));
         }
+        if (!$this->dryRun && $photoReviews > 0) {
+            $this->info(sprintf('○ Attached photos to %d reviews.', $photoReviews));
+        }
         $reporter->merge([
             'created_reviews' => $totalGenerated,
+            'photo_reviews' => $photoReviews,
             'skipped_products' => $skippedProducts,
             'scheduled_reviews' => $scheduledCount,
         ], [
             'created_reviews' => $totalGenerated,
+            'photo_reviews' => $photoReviews,
             'skipped_products' => $skippedProducts,
             'scheduled_reviews' => $scheduledCount,
             'dry_run' => $this->dryRun,
@@ -424,34 +479,129 @@ class GenerateProductReviews extends Command
         mixed $limit
     ): Collection
     {
+        return collect($this->getProductsLazy(
+            $productId,
+            $productIds,
+            $categoryId,
+            $brandId,
+            $all,
+            $reviewCountMax,
+            $limit
+        )->all());
+    }
+
+    protected function countProducts(
+        ?string $productId,
+        mixed $productIds,
+        ?string $categoryId,
+        ?string $brandId,
+        bool $all,
+        mixed $reviewCountMax,
+        mixed $limit
+    ): int {
+        $canonicalIdsQuery = $this->limitCanonicalProductIdsQuery(
+            $this->buildCanonicalProductIdsQuery(
+                $productId,
+                $productIds,
+                $categoryId,
+                $brandId,
+                $all,
+                $reviewCountMax
+            ),
+            $limit
+        );
+
+        return (int) DB::query()
+            ->fromSub($canonicalIdsQuery->toBase(), 'selected_products')
+            ->count();
+    }
+
+    protected function getProductsLazy(
+        ?string $productId,
+        mixed $productIds,
+        ?string $categoryId,
+        ?string $brandId,
+        bool $all,
+        mixed $reviewCountMax,
+        mixed $limit
+    ): LazyCollection {
+        $canonicalIdsQuery = $this->limitCanonicalProductIdsQuery(
+            $this->buildCanonicalProductIdsQuery(
+                $productId,
+                $productIds,
+                $categoryId,
+                $brandId,
+                $all,
+                $reviewCountMax
+            ),
+            $limit
+        );
+
+        return $canonicalIdsQuery
+            ->toBase()
+            ->cursor()
+            ->map(fn ($row) => (int) $row->canonical_id)
+            ->chunk(50)
+            ->flatMap(function ($idChunk): Collection {
+                $canonicalIds = collect($idChunk)
+                    ->map(fn ($id) => (int) $id)
+                    ->filter(fn (int $id) => $id > 0)
+                    ->values();
+
+                if ($canonicalIds->isEmpty()) {
+                    return collect();
+                }
+
+                $products = Product::query()
+                    ->without(['ap', 'suppliers'])
+                    ->with(['categories', 'regionalContents', 'parent'])
+                    ->whereIn('id', $canonicalIds->all())
+                    ->get()
+                    ->keyBy(fn (Product $product) => (int) $product->getKey());
+
+                return $canonicalIds
+                    ->map(fn (int $id) => $products->get($id))
+                    ->filter(fn ($product) => $product instanceof Product)
+                    ->values();
+            });
+    }
+
+    protected function buildProductSelectionQuery(
+        ?string $productId,
+        mixed $productIds,
+        ?string $categoryId,
+        ?string $brandId,
+        bool $all,
+        mixed $reviewCountMax
+    ): Builder {
         $query = Product::query()
-            ->where('is_active', true)
-            ->with(['categories', 'regionalContents']);
+            ->without(['categories', 'ap', 'suppliers', 'parent'])
+            ->where('is_active', true);
 
         if ($productId) {
-            return $query->where('id', $productId)->get();
+            return $query->where('id', $productId);
         }
 
         $productIds = $this->normalizeProductIds($productIds);
         if ($productIds !== []) {
-            return $query->whereIn('id', $productIds)->get();
+            return $query->whereIn('id', $productIds);
         }
 
         if ($categoryId) {
             $categoryIds = Category::getCategoryNodeIdList(null, (int) $categoryId);
             if (empty($categoryIds)) {
-                return collect();
+                return $query->whereRaw('1 = 0');
             }
 
             $query->whereHas('categories', fn ($q) => $q->whereIn('ak_product_categories.id', $categoryIds));
         } elseif ($brandId) {
             if (! Brand::query()->whereKey((int) $brandId)->exists()) {
-                return collect();
+                return $query->whereRaw('1 = 0');
             }
 
             $query->where('brand_id', (int) $brandId);
         } elseif (! $all) {
-            return collect();
+            return $query->whereRaw('1 = 0');
         }
 
         $reviewCountMax = $this->normalizeNullableInt($reviewCountMax);
@@ -461,12 +611,44 @@ class GenerateProductReviews extends Command
             ])->having('moderated_reviews_count', '<=', $reviewCountMax);
         }
 
+        return $query;
+    }
+
+    protected function buildCanonicalProductIdsQuery(
+        ?string $productId,
+        mixed $productIds,
+        ?string $categoryId,
+        ?string $brandId,
+        bool $all,
+        mixed $reviewCountMax
+    ): Builder {
+        $table = (new Product())->getTable();
+        $query = $this->buildProductSelectionQuery(
+            $productId,
+            $productIds,
+            $categoryId,
+            $brandId,
+            $all,
+            $reviewCountMax
+        );
+
+        return $query
+            ->selectRaw(
+                "CASE WHEN {$table}.parent_id IS NULL OR {$table}.parent_id = 0 THEN {$table}.id ELSE {$table}.parent_id END as canonical_id"
+            )
+            ->distinct()
+            ->orderBy('canonical_id');
+    }
+
+    protected function limitCanonicalProductIdsQuery(Builder $query, mixed $limit): Builder
+    {
         $limit = $this->normalizeNullableInt($limit);
+
         if ($limit !== null && $limit > 0) {
             $query->limit($limit);
         }
 
-        return $query->get();
+        return $query;
     }
 
     protected function getBotPools(array $countryFilters, array $localeFilters): Collection
@@ -542,9 +724,11 @@ class GenerateProductReviews extends Command
 
     protected function hasExistingBotReviews(Product $product): bool
     {
+        $familyProductIds = $this->productTargetResolver->familyProductIds($product);
+
         return Review::query()
             ->where('reviewable_type', Product::class)
-            ->where('reviewable_id', $product->id)
+            ->whereIn('reviewable_id', $familyProductIds)
             ->where(fn ($q) => $q
                 ->whereJsonContains('extras->generated_by_bot', true)
                 ->orWhereJsonContains('extras->skip_reward', true)
@@ -554,9 +738,11 @@ class GenerateProductReviews extends Command
 
     protected function getExistingReviewerOwnerIds(Product $product): array
     {
+        $familyProductIds = $this->productTargetResolver->familyProductIds($product);
+
         return Review::query()
             ->where('reviewable_type', Product::class)
-            ->where('reviewable_id', $product->id)
+            ->whereIn('reviewable_id', $familyProductIds)
             ->where(fn ($query) => $query->whereNull('parent_id')->orWhere('parent_id', 0))
             ->whereNotNull('owner_id')
             ->pluck('owner_id')
@@ -564,14 +750,24 @@ class GenerateProductReviews extends Command
             ->all();
     }
 
+    protected function resolveReservedReviewerOwnerIds(Product $product): array
+    {
+        if (! $this->preventDuplicateReviewers) {
+            return [];
+        }
+
+        return $this->getExistingReviewerOwnerIds($product);
+    }
+
     protected function createReview(Product $product, Profile $bot, array $reviewData, int $rating): ?Review
     {
+        $canonicalProductId = $this->productTargetResolver->canonicalProductId($product);
         $ownerId = $this->resolveBotOwnerId($bot);
         if ($ownerId === null) {
             return null;
         }
 
-        if ($this->reviewAlreadyExists($product, $ownerId)) {
+        if ($this->preventDuplicateReviewers && $this->reviewAlreadyExists($product, $ownerId)) {
             return null;
         }
 
@@ -607,7 +803,7 @@ class GenerateProductReviews extends Command
             $review->rating = $rating;
             $review->owner_id = $ownerId;
             $review->reviewable_type = Product::class;
-            $review->reviewable_id = $product->id;
+            $review->reviewable_id = $canonicalProductId;
             $review->is_moderated = $this->publishNow;
             $review->lang = $this->resolveBotLocale($bot);
             $review->country = $this->resolveBotCountry($bot);
@@ -622,30 +818,13 @@ class GenerateProductReviews extends Command
         }
     }
 
-    protected function scheduleGeneratedReviews(Collection $reviews): int
+    protected function shouldAttachPhotoReview(): bool
     {
-        $reviews = $reviews->shuffle()->values();
-        if ($reviews->isEmpty()) {
-            return 0;
+        if ($this->photoReviewChanceNumerator < 1 || $this->photoReviewChanceDenominator < 1) {
+            return false;
         }
 
-        $currentDay = $this->resolveScheduleStart();
-        $slotsRemaining = $this->randomDailySlots();
-        $scheduled = 0;
-
-        foreach ($reviews as $review) {
-            if ($slotsRemaining < 1) {
-                $currentDay = $currentDay->copy()->addDay()->startOfDay();
-                $slotsRemaining = $this->randomDailySlots();
-            }
-
-            $publishAt = $this->randomizePublishAt($currentDay);
-            $review->schedulePublication($publishAt, true);
-            $scheduled++;
-            $slotsRemaining--;
-        }
-
-        return $scheduled;
+        return random_int(1, $this->photoReviewChanceDenominator) <= $this->photoReviewChanceNumerator;
     }
 
     protected function resolveScheduleStart(): Carbon
@@ -662,40 +841,66 @@ class GenerateProductReviews extends Command
             $start = now()->copy()->addMinutes(10);
         }
 
-        return $start->copy()->startOfDay();
+        return $start->copy();
     }
 
-    protected function randomDailySlots(): int
+    protected function resolveScheduleMinPerDay(): int
     {
-        $min = max(1, (int) $this->option('schedule-min-per-day'));
-        $max = max($min, (int) $this->option('schedule-max-per-day'));
-
-        return random_int($min, $max);
+        return max(1, (int) $this->option('schedule-min-per-day'));
     }
 
-    protected function randomizePublishAt(Carbon $day): Carbon
+    protected function resolveScheduleMaxPerDay(): int
     {
-        $hourFrom = max(0, min(23, (int) $this->option('schedule-hour-from')));
-        $hourTo = max($hourFrom, min(23, (int) $this->option('schedule-hour-to')));
+        return max($this->resolveScheduleMinPerDay(), (int) $this->option('schedule-max-per-day'));
+    }
 
-        $publishAt = $day->copy()->setTime(
-            random_int($hourFrom, $hourTo),
-            random_int(0, 59),
-            random_int(0, 59)
-        );
+    protected function resolveScheduleHourFrom(): int
+    {
+        return max(0, min(23, (int) $this->option('schedule-hour-from')));
+    }
 
-        if ($publishAt->lessThan(now()->copy()->addMinutes(5))) {
-            return now()->copy()->addMinutes(5);
+    protected function resolveScheduleHourTo(): int
+    {
+        return max($this->resolveScheduleHourFrom(), min(23, (int) $this->option('schedule-hour-to')));
+    }
+
+    protected function resolvePhotoReviewChance(): array
+    {
+        $value = trim((string) $this->option('photo-review-chance'));
+        if ($value === '') {
+            return [0, 10];
         }
 
-        return $publishAt;
+        if (!preg_match('/^\s*(\d+)\s*\/\s*(\d+)\s*$/', $value, $matches)) {
+            throw new \InvalidArgumentException('Photo review chance must be in the format X/Y.');
+        }
+
+        $numerator = (int) $matches[1];
+        $denominator = (int) $matches[2];
+
+        if ($denominator < 1) {
+            throw new \InvalidArgumentException('Photo review chance denominator must be greater than zero.');
+        }
+
+        if ($numerator < 0 || $numerator > $denominator) {
+            throw new \InvalidArgumentException('Photo review chance numerator must be between 0 and the denominator.');
+        }
+
+        return [$numerator, $denominator];
+    }
+
+    protected function resolvePreventDuplicateReviewers(): bool
+    {
+        return $this->normalizeBooleanOption($this->option('prevent-duplicate-reviewers'), true);
     }
 
     protected function reviewAlreadyExists(Product $product, int $ownerId): bool
     {
+        $familyProductIds = $this->productTargetResolver->familyProductIds($product);
+
         return Review::query()
             ->where('reviewable_type', Product::class)
-            ->where('reviewable_id', $product->id)
+            ->whereIn('reviewable_id', $familyProductIds)
             ->where('owner_id', $ownerId)
             ->where(fn ($query) => $query->whereNull('parent_id')->orWhere('parent_id', 0))
             ->exists();
@@ -716,6 +921,39 @@ class GenerateProductReviews extends Command
         }
 
         return self::LANGUAGE_ALIASES[$locale] ?? $locale;
+    }
+
+    protected function normalizeBooleanOption(mixed $value, bool $default = false): bool
+    {
+        if ($value === null || $value === '') {
+            return $default;
+        }
+
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value)) {
+            return $value !== 0;
+        }
+
+        if (is_string($value)) {
+            $normalized = strtolower(trim($value));
+
+            if ($normalized === '') {
+                return $default;
+            }
+
+            if (in_array($normalized, ['1', 'true', 'yes', 'on'], true)) {
+                return true;
+            }
+
+            if (in_array($normalized, ['0', 'false', 'no', 'off'], true)) {
+                return false;
+            }
+        }
+
+        return (bool) $value;
     }
 
     protected function normalizeProductIds(mixed $value): array

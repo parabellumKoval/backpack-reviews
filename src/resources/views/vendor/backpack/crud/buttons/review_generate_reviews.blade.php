@@ -27,6 +27,9 @@
         ->sortKeys()
         ->all();
 @endphp
+@php
+    $defaultScheduleStart = now()->addDay()->setTime(9, 0)->format('Y-m-d\TH:i');
+@endphp
 
 <button type="button" class="btn btn-primary" id="open-review-generation-modal">
     <i class="la la-magic"></i> Генерация отзывов
@@ -89,7 +92,8 @@
                         </div>
                         <div class="form-group col-md-3">
                             <label for="review_generation_schedule_start">Старт публикации</label>
-                            <input type="text" class="form-control" id="review_generation_schedule_start" value="tomorrow">
+                            <input type="datetime-local" class="form-control" id="review_generation_schedule_start" value="{{ $defaultScheduleStart }}">
+                            <small class="form-text text-muted">Первая возможная дата и время публикации.</small>
                         </div>
                     </div>
 
@@ -131,11 +135,34 @@
                         </div>
                     </div>
 
+                    <div class="form-row">
+                        <div class="form-group col-md-3">
+                            <label for="review_generation_photo_review_chance_numerator">Фото-отзывов</label>
+                            <input type="number" min="0" max="100" class="form-control" id="review_generation_photo_review_chance_numerator" value="0">
+                        </div>
+                        <div class="form-group col-md-3">
+                            <label for="review_generation_photo_review_chance_denominator">Из каждых</label>
+                            <input type="number" min="1" max="100" class="form-control" id="review_generation_photo_review_chance_denominator" value="10">
+                        </div>
+                        <div class="form-group col-md-6">
+                            <label>&nbsp;</label>
+                            <div class="form-control-plaintext text-muted">
+                                Фото-отзывы добавляются случайно, без жёсткого паттерна. Используются только подтверждённые фото-кандидаты товара.
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="form-row align-items-center">
                         <div class="col-md-3 mb-2">
                             <div class="form-check">
                                 <input type="checkbox" class="form-check-input" id="review_generation_skip_existing">
                                 <label class="form-check-label" for="review_generation_skip_existing">Пропускать товары с bot-отзывами</label>
+                            </div>
+                        </div>
+                        <div class="col-md-3 mb-2">
+                            <div class="form-check">
+                                <input type="checkbox" class="form-check-input" id="review_generation_prevent_duplicate_reviewers" checked>
+                                <label class="form-check-label" for="review_generation_prevent_duplicate_reviewers">Не дублировать пользователя у товара</label>
                             </div>
                         </div>
                         <div class="col-md-3 mb-2">
@@ -423,12 +450,15 @@
             locales: $('#review_generation_locales').val() || [],
             countries: $('#review_generation_countries').val() || [],
             skip_existing: $('#review_generation_skip_existing').is(':checked') ? 1 : 0,
+            prevent_duplicate_reviewers: $('#review_generation_prevent_duplicate_reviewers').is(':checked') ? 1 : 0,
             publish_now: $('#review_generation_publish_now').is(':checked') ? 1 : 0,
             schedule_start: $('#review_generation_schedule_start').val() || null,
             schedule_min_per_day: $('#review_generation_schedule_min_per_day').val() || null,
             schedule_max_per_day: $('#review_generation_schedule_max_per_day').val() || null,
             schedule_hour_from: $('#review_generation_schedule_hour_from').val() || null,
             schedule_hour_to: $('#review_generation_schedule_hour_to').val() || null,
+            photo_review_chance_numerator: $('#review_generation_photo_review_chance_numerator').val() || 0,
+            photo_review_chance_denominator: $('#review_generation_photo_review_chance_denominator').val() || 10,
             dry_run: $('#review_generation_dry_run').is(':checked') ? 1 : 0,
         };
     }

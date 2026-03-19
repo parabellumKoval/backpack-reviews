@@ -11,6 +11,7 @@ use Backpack\Reviews\app\Models\Review;
 use Backpack\Reviews\app\Models\Admin\Review as ReviewAdmin;
 use Backpack\Reviews\app\Observers\ReviewObserver;
 use Backpack\Reviews\app\Console\Commands\GenerateProductReviews;
+use Backpack\Reviews\app\Console\Commands\GenerateProductReviewPhotos;
 use Backpack\Reviews\app\Console\Commands\SyncGoogleReviews;
 
 class ServiceProvider extends \Illuminate\Support\ServiceProvider
@@ -21,6 +22,7 @@ class ServiceProvider extends \Illuminate\Support\ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 GenerateProductReviews::class,
+                GenerateProductReviewPhotos::class,
                 SyncGoogleReviews::class,
             ]);
         }

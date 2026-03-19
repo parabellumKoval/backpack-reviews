@@ -10,11 +10,22 @@ Route::group([
 ], function () { 
     Route::crud('review', 'ReviewCrudController');
     Route::crud('google-review', 'GoogleReviewCrudController');
+    Route::crud('generated-product-photo', 'GeneratedProductPhotoCrudController');
     Route::post('google-review/sync', 'GoogleReviewCrudController@syncNow')
         ->name('bp.reviews.google.sync');
     Route::post('review/{id}/toggle', [
         'as' => 'reviews.toggle',
         'uses' => 'ReviewCrudController@toggleColumnRouter',
+        'operation' => 'list',
+    ]);
+    Route::post('google-review/{id}/toggle', [
+        'as' => 'google-review.toggle',
+        'uses' => 'GoogleReviewCrudController@toggleColumnRouter',
+        'operation' => 'list',
+    ]);
+    Route::post('generated-product-photo/{id}/toggle', [
+        'as' => 'generated-product-photo.toggle',
+        'uses' => 'GeneratedProductPhotoCrudController@toggleColumnRouter',
         'operation' => 'list',
     ]);
 
@@ -31,6 +42,20 @@ Route::group([
         Route::post('/', [GenerationRunController::class, 'storeReviews'])->name('bp.reviews.generations.store');
         Route::get('{run}', [GenerationRunController::class, 'show'])->name('bp.reviews.generations.show');
     });
+
+    Route::group([
+        'prefix' => 'review/photo-generation-runs',
+        'defaults' => ['generation_type' => \App\Models\GenerationRun::TYPE_PRODUCT_REVIEW_PHOTOS],
+    ], function () {
+        Route::get('/', [GenerationRunController::class, 'index'])->name('bp.reviews.photo_generations.index');
+        Route::post('/', [GenerationRunController::class, 'storePhotos'])->name('bp.reviews.photo_generations.store');
+        Route::get('{run}', [GenerationRunController::class, 'show'])->name('bp.reviews.photo_generations.show');
+    });
+
+    Route::get('generated-product-photo/moderation', 'GeneratedProductPhotoCrudController@moderation')
+        ->name('bp.reviews.generated-photos.moderation');
+    Route::post('generated-product-photo/moderation/approve', 'GeneratedProductPhotoCrudController@moderateBatch')
+        ->name('bp.reviews.generated-photos.moderation.approve');
 });
 
 
