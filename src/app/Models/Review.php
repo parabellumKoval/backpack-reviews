@@ -89,6 +89,7 @@ class Review extends Model implements SchedulableInterface, HasCrudCardInterface
       'extras',
       'lang',
       'country',
+      'created_at',
     ];
     // protected $hidden = [];
     // protected $dates = [];

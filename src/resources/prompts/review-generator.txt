@@ -52,6 +52,18 @@ Each review must reflect that user's:
 - Emoji usage preference
 - Punctuation habits
 - Message length preference (most should be SHORT)
+- review_brief: this is mandatory. Follow each user's angle, structure, target_length, emoji_policy, style_mode, noise_policy and avoid_patterns.
+
+STRUCTURE DIVERSITY REQUIREMENTS:
+- Treat every review as written by a different person in a different situation.
+- Do not make the batch read like one author wrote variations of the same sentence.
+- Do not use the same rhetorical formula across reviews, especially "good/effective, but minor caveat".
+- Do not place exactly one emoji between sentences in multiple reviews.
+- Some reviews can be extremely short, for example a quick thanks, a simple verdict, or a tiny effect note.
+- Some reviews must look typed quickly on a phone: broken grammar, missing commas, repeated signs, lowercase, typos, text emoticons, or emoji spam when the user/brief allows it.
+- Some reviews may mention delivery, packaging, shop service, repeat purchase, gift context, comparison, expectation, routine, taste/aroma/texture, or one practical detail.
+- If the review_brief says no emoji or one sentence, obey it even if the user profile usually uses more emoji.
+- If style_mode is one_word, tiny_broken, emoji_spam, sloppy_lowercase, camel_case, punctuation_spam, or typo_heavy, make the review visibly match that style. Do not make it polished.
 
 OUTPUT: Return JSON array with {{COUNT}} objects:
 [

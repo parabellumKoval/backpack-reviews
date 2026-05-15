@@ -40,6 +40,7 @@ class ReviewRequest extends FormRequest
           'photo_gallery.*.src' => 'required_with:photo_gallery|string',
           'lang' => 'nullable|string|min:2|max:5',
           'country' => 'nullable|string|size:2',
+          'created_at' => 'nullable|date',
         ];
     }
 

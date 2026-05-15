@@ -166,7 +166,7 @@ class ReviewCrudController extends CrudController
       
       $this->crud->addColumn([
         'name' => 'created_at',
-        'label' => 'Дата',
+        'label' => 'Дата публикации',
         'type'=>'datetime'
       ]);
       $this->addToggleColumn([
@@ -289,6 +289,17 @@ class ReviewCrudController extends CrudController
         'label' => 'Опубликовано',
         'type' => 'boolean',
         'default' => 1
+      ]);
+
+      $this->crud->addField([
+        'name' => 'created_at',
+        'label' => 'Дата публикации',
+        'type' => 'datetime',
+        'default' => now()->toDateTimeString(),
+        'hint' => 'Эта дата показывается на фронте и используется для сортировки отзывов.',
+        'wrapper' => [
+          'class' => 'form-group col-md-4',
+        ],
       ]);
       
       $this->crud->addField([
